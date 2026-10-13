@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# 판정 실행 산출물 (프로젝트 인계 H-11)
+reports/gate_report.json
+reports/runs/

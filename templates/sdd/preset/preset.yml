@@ -1,0 +1,46 @@
+schema_version: "1.0"
+
+preset:
+  id: "tdd-harness"
+  name: "TDD Harness"
+  version: "1.0.0"
+  description: "TDD 하네스(agent-harness) 연동 Spec Kit 프리셋: 불변식, 경계값 표, 권위 순서 준수 및 헌법 생성 보호"
+  author: "agent-harness"
+  license: "MIT"
+
+requires:
+  # 합성 전략(wrap)과 런타임 해석 기준. 확인한 판: 1.1.4.dev0 (커밋 985e637)
+  speckit_version: ">=0.14.4"
+
+provides:
+  templates:
+    - type: "template"
+      name: "spec-template"
+      file: "templates/spec-template.md"
+      description: "불변식(INV-#) 및 경계값 표(Boundary tables) 절을 추가한 명세 템플릿"
+      strategy: "wrap"
+
+    - type: "command"
+      name: "speckit.specify"
+      file: "commands/speckit.specify.md"
+      description: "TDD 하네스 규칙(가정 H2 표시, 결정 미생성, Invariants/Boundary tables 작성)을 추가하는 specify 명령"
+      strategy: "wrap"
+
+    - type: "command"
+      name: "speckit.clarify"
+      file: "commands/speckit.clarify.md"
+      description: "TDD 하네스 규칙(답변 H2 표시, D-## 연계, Boundary tables 동기화)을 추가하는 clarify 명령"
+      strategy: "wrap"
+
+    - type: "command"
+      name: "speckit.constitution"
+      file: "commands/speckit.constitution.md"
+      description: "config/*.toml 단일 권위를 보호하고 constitution.py 생성을 안내하는 constitution 차단 명령"
+      replaces: "speckit.constitution"
+      strategy: "replace"
+
+tags:
+  - "tdd"
+  - "harness"
+  - "testing"
+  - "traceability"

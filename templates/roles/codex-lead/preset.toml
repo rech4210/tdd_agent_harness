@@ -1,0 +1,20 @@
+# 역할 프리셋: Codex 가 lead (명세 · 테스트 · 판정 지휘), AGY 가 구현, Claude 가 적대적 검토.
+# 적용: python harness/roles.py --preset codex-lead [--slice <ID>]   (사람이 실행. config/ 는 사람만 고친다)
+about = "lead · 명세 · 테스트 = codex, 구현 = agy (Gemini), 품질 검토 (적대적 검토) · 변이 분류 = claude"
+lead = "codex"          # 안내 문서용 정보 (역할이 아니다: lead 는 사람과 대화하며 흐름을 지휘하는 에이전트)
+
+[agents.codex]
+family = "openai"
+
+[agents.agy]
+family = "google"      # 위임 도구의 agy 프로필은 모두 Gemini (2026-10-11). 다른 모델을 -Model 로 돌리면 지시서 family 로 GA 가 잡는다
+
+[agents.claude]
+family = "anthropic"
+
+[assign]
+spec_author = "codex"
+test_author = "codex"
+implementer = "agy"
+adversary = "claude"
+mutation_auditor = "claude"

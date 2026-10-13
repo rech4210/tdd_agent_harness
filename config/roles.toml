@@ -1,0 +1,67 @@
+# 역할별 쓰기 권한 (프로젝트 소유, 사람만 고친다: H10). check_protected_paths.py(G0)가 git diff 를 이 표와 대조한다.
+# 원칙: 명세를 쓰는 역할 · 테스트를 쓰는 역할 · 구현하는 역할을 분리한다.
+# deny 가 allow 보다 우선한다. 어느 쪽에도 없는 경로를 바꾸면 실패한다.
+# harness/ · adapters/ · templates/ (하네스 소유)와 config/ (판정 설정), .specify/memory/ (생성된 헌법)는 어떤 에이전트 역할도 고치지 않는다.
+# lock_exempt = true: 첫 잠금 전에 일하는 역할. 테스트 잠금 검사를 건너뛴다 (test_author 는 이름만으로 제외)
+
+# 명세 작성 (Spec Kit specify · clarify). 명세는 H3 에서 테스트와 함께 잠긴다 (dev/DECISIONS.md HD-01 · HD-02)
+[roles.spec_author]
+allow = ["specs/**", ".specify/feature.json", ".specify/workflows/runs/**", "reports/**"]
+deny  = ["src/**", "tests/**", "harness/**", "adapters/**", "templates/**", "config/**", ".specify/memory/**",
+         ".specify/templates/**", ".specify/presets/**", "pyproject.toml", ".github/**"]
+lock_exempt = true
+
+[roles.test_author]
+allow = ["tests/**", "reports/**", "work_orders/**"]
+deny  = ["src/**", "specs/**", ".specify/**", "harness/**", "adapters/**", "templates/**", "config/**",
+         "pyproject.toml", "setup.cfg", ".github/**"]
+
+[roles.implementer]
+allow = ["src/**", "reports/**"]
+deny  = [
+  "tests/**",            # 테스트는 읽기만
+  "specs/**",            # 명세는 읽기만
+  ".specify/**",
+  "harness/**",          # 게이트 엔진
+  "adapters/**",         # 언어 · 도구 어댑터 (판정의 일부)
+  "templates/**",
+  "config/**",           # 게이트 · 역할 · 슬라이스 · 배정 · 잠금
+  "pyproject.toml",      # 커버리지 · 변이 · 테스트 도구 설정이 여기 있다 (우회 경로)
+  "setup.cfg",
+  "conftest.py",
+  "**/conftest.py",
+  ".github/**",
+  ".coveragerc",
+  "**/.coveragerc",
+]
+# 쓸 수는 있지만 사람이 읽어야 병합되는 경로 (H4 포트 · H5 마이그레이션 · H6 결제 등). 프로젝트가 채운다
+review_required = []
+
+[roles.mutation_auditor]
+allow = ["reports/**"]
+deny  = ["src/**", "tests/**", "specs/**", ".specify/**", "harness/**", "adapters/**", "templates/**", "config/**"]
+lock_exempt = true   # 잠금 전에 일하는 읽기 전용 역할, 자기 변경은 권한 검사가 막는다 (HD-20)
+
+[roles.reviewer]
+allow = ["reports/**"]
+deny  = ["src/**", "tests/**", "specs/**", ".specify/**", "harness/**", "adapters/**", "templates/**", "config/**"]
+lock_exempt = true   # 잠금 전에 일하는 읽기 전용 역할, 자기 변경은 권한 검사가 막는다 (HD-20)
+
+# 적대적 검토 (명세 · 테스트 · 구현 diff 를 공격하고 공격 사례를 제안만 한다). 분리 쌍 test_author ≠ adversary 의 역할
+[roles.adversary]
+allow = ["reports/**"]
+deny  = ["src/**", "tests/**", "specs/**", ".specify/**", "harness/**", "adapters/**", "templates/**", "config/**"]
+lock_exempt = true   # 잠금 전에 일하는 읽기 전용 역할, 자기 변경은 권한 검사가 막는다 (HD-20)
+
+# 분리 제약. 같은 슬라이스 안에서 아래 두 역할은 **다른 모델 계열**이어야 한다.
+# 어떤 에이전트가 어떤 역할을 맡는지는 여기 적지 않는다. 배정은 config/assignments.toml, 계열은 config/agents.toml.
+# 검사: harness/check_assignments.py (게이트 GA)
+[separation]
+pairs = [
+  ["test_author", "implementer"],        # 같은 오해를 공유하면 틀린 테스트를 틀린 구현이 통과한다
+  ["spec_author", "implementer"],        # 자기가 구현할 명세를 자기가 쓰면 명세가 구현에 맞춰진다
+  ["implementer", "reviewer"],           # 자기가 쓸 법한 우회는 자기 눈에 정상으로 보인다
+  ["implementer", "adversary"],          # 품질 검토자가 구현을 검토한다
+  ["test_author", "mutation_auditor"],   # 자기 테스트의 약점을 '등가 변이'로 변명할 수 있다
+  ["test_author", "adversary"],          # 레드팀이 테스트 작성자와 같은 맹점을 공유하면 그 맹점을 공격하지 못한다
+]

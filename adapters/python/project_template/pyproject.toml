@@ -1,0 +1,44 @@
+[project]
+name = "<package>"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-cov", "pytest-timeout", "hypothesis", "mutmut>=3", "xenon", "mypy", "bandit"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# 이 파일은 사람만 고친다 (config/roles.toml 에서 에이전트 역할에 금지). 테스트 · 커버리지 · 변이 설정이 우회 경로이기 때문이다.
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+markers = ["integration: 실제 외부 자원(DB 등)이 필요한 테스트"]
+xfail_strict = true          # 몰래 통과하는 xfail 도 실패로
+timeout = 60                 # 끝나지 않는 구현은 판정을 멈추게 하지 말고 실패해야 한다
+
+[tool.coverage.run]
+branch = true
+source = ["src/<package>"]
+
+[tool.coverage.report]
+# exclude_lines 를 늘리는 것은 커버리지를 '깎는' 행위이므로 사람만 고친다
+# 독립된 "..." 줄만 제외한다. "\\.\\.\\." 는 tuple[X, ...] 표기에 걸려 함수 전체를 측정에서 뺐다 (프로젝트 인계 H-02)
+exclude_lines = ["if TYPE_CHECKING:", "raise NotImplementedError", "^\\s*\\.\\.\\.\\s*$"]
+
+[tool.mutmut]
+# 전체 게이트 값. 슬라이스 판정(--slice)을 쓰면 config/slices.toml 의 mutation_config 와 같게 맞춘다 (G6 이 확인한다)
+source_paths = ["src/<package>/"]
+pytest_add_cli_args_test_selection = ["tests/unit/"]
+also_copy = ["src/<package>/"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"

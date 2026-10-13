@@ -1,0 +1,21 @@
+# 역할 프리셋: Claude 가 lead (명세 · 테스트 · 판정 지휘), AGY 가 구현, Codex 가 검토 · 레드팀.
+# agent-harness 자신의 개발 방식(HD-08)과 같은 배치.
+# 적용: python harness/roles.py --preset claude-lead [--slice <ID>]  또는  python harness/roles.py --ask   (사람이 실행)
+about = "lead · 명세 · 테스트 = claude, 구현 = agy (Gemini), 품질 검토 · 레드팀 · 변이 분류 = codex"
+lead = "claude"         # 안내 문서용 정보 (역할이 아니다)
+
+[agents.claude]
+family = "anthropic"
+
+[agents.agy]
+family = "google"      # 위임 도구의 agy 프로필은 모두 Gemini (2026-10-11). 다른 모델을 -Model 로 돌리면 지시서 family 로 GA 가 잡는다
+
+[agents.codex]
+family = "openai"
+
+[assign]
+spec_author = "claude"
+test_author = "claude"
+implementer = "agy"
+adversary = "codex"
+mutation_auditor = "codex"

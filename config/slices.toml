@@ -1,0 +1,37 @@
+# 슬라이스 판정 (프로젝트 소유, 사람만 고친다: H10): 작업 지시서 하나가 시스템의 한 조각만 구현할 때의 판정 범위.
+# 범위를 정하는 것은 사람, 판정은 run_gates.py.
+#
+# 사용: python harness/run_gates.py --role implementer --base <base> --wo WO-01 --slice WO-01
+#
+# 규칙
+# - files: 슬라이스가 만드는 소스 파일. 커버리지 측정 대상은 files 전체로 한다 (일부만 재면 로직을 측정 밖 파일로 옮겨 피할 수 있다)
+# - override.<게이트>: 그 게이트의 키를 덮어쓴다 (cmd, cmds, min_branch_percent, only_layers, never_import_from, checks 등)
+# - skip.<게이트>: 슬라이스 범위 밖. 보고서에 SKIP 과 이유로 남는다. '통과'로 세지 않는다
+# - mutation_config: 변이 도구 설정. 도구가 프로젝트 파일(예: pyproject.toml)만 읽는 경우,
+#   실행기가 그 파일의 값이 여기 적은 값과 같은지 확인하고 다르면 G6 을 실패시킨다 (사람이 맞춘다)
+# - 슬라이스 통과 = 병합 가능. 릴리스는 전체 게이트(--slice 없이) 통과가 기준이다
+#
+# 예:
+# [slice.WO-01]
+# title = "금액 값 객체 (Money)"
+# files = ["src/<package>/domain/money.py"]
+#
+# [slice.WO-01.skip]
+# G4 = "인수 테스트는 유스케이스 조립이 필요하다. 전체 게이트에서 확인한다"
+#
+# [slice.WO-01.override.G1]
+# only_layers = ["domain"]                 # 아직 없는 레이어는 검사하지 않는다 (존재 검사는 전체 게이트에서)
+# checks = ["source_tree", "layers", "never_import", "inner", "test_frameworks"]
+#
+# [slice.WO-01.override.G2]
+# cmd = ["python", "-m", "pytest", "-q", "tests/unit/test_money.py",
+#        "--cov=<package>", "--cov-branch", "--cov-report=json:reports/coverage.json",
+#        "--hypothesis-seed=0", "--junit-xml=reports/junit.xml"]
+#
+# [slice.WO-01.override.G3.min_branch_percent]
+# "src/<package>/domain/money.py" = 100
+#
+# [slice.WO-01.mutation_config]
+# source_paths = ["src/<package>/domain/money.py"]
+# pytest_add_cli_args_test_selection = ["tests/unit/test_money.py"]
+# also_copy = ["src/<package>/"]
