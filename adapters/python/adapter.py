@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import textwrap
 import tomllib
 from pathlib import Path
 
@@ -145,32 +146,143 @@ def survivors(run_full, env: dict[str, str]) -> list[str]:
     return out
 
 
+def _extract_raise_stmt(hunk: list[tuple[int, str]], changed_indices: set[int]) -> tuple[list[str], set[int]] | None:
+    """hunk 에서 changed_indices 를 포함하는 단일 raise 문을 찾는다."""
+    for start_idx, (_, text) in enumerate(hunk):
+        if not re.match(r"^\s*raise\b", text):
+            continue
+        for end_idx in range(start_idx + 1, len(hunk) + 1):
+            hunk_indices = {hunk[k][0] for k in range(start_idx, end_idx)}
+            chunk_lines = [t for (_, t) in hunk[start_idx:end_idx]]
+            code = textwrap.dedent("\n".join(chunk_lines))
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            if len(tree.body) == 1 and isinstance(tree.body[0], ast.Raise):
+                if end_idx < len(hunk) and hunk[end_idx][1].lstrip().startswith("from "):
+                    continue
+                if hunk_indices & changed_indices:
+                    return chunk_lines, hunk_indices
+    return None
+
+
+def _extract_multiline_raise_diff(diff: list[str]) -> tuple[list[str], list[str]] | None:
+    """mutmut unified diff 에서 여러 줄 raise 문의 이전/이후 문장을 복원한다."""
+    hunk_lines = [
+        d for d in diff
+        if d.startswith(" ") or (d.startswith("-") and not d.startswith("---")) or (d.startswith("+") and not d.startswith("+++"))
+    ]
+    if not hunk_lines:
+        return None
+
+    old_hunk = [(i, d[1:]) for i, d in enumerate(hunk_lines) if d.startswith(" ") or d.startswith("-")]
+    new_hunk = [(i, d[1:]) for i, d in enumerate(hunk_lines) if d.startswith(" ") or d.startswith("+")]
+
+    removed_changed = {i for i, d in enumerate(hunk_lines) if d.startswith("-") and not d.startswith("---")}
+    added_changed = {i for i, d in enumerate(hunk_lines) if d.startswith("+") and not d.startswith("+++")}
+
+    old_res = _extract_raise_stmt(old_hunk, removed_changed)
+    new_res = _extract_raise_stmt(new_hunk, added_changed)
+    if old_res is None or new_res is None:
+        return None
+
+    old_lines, old_indices = old_res
+    new_lines, new_indices = new_res
+    raise_indices = old_indices | new_indices
+
+    all_changed = removed_changed | added_changed
+    # diff 안의 모든 변경이 raise 문 안에서만 일어났어야 한다 (N05, N13 방지)
+    if not all_changed or not all_changed.issubset(raise_indices):
+        return None
+
+    if not (removed_changed & old_indices) or not (added_changed & new_indices):
+        return None
+
+    return old_lines, new_lines
+
+
 def survivor_diff(mid: str, run_full, env: dict[str, str]) -> tuple[list[str], list[str]]:
     diff = run_full(wrap_mutation(["mutmut", "show", f"'{mid}'"], env)).splitlines()
-    removed = [d[1:] for d in diff if d.startswith("-") and not d.startswith("---")]
-    added = [d[1:] for d in diff if d.startswith("+") and not d.startswith("+++")]
-    return removed, added
+    raw_removed = [d[1:] for d in diff if d.startswith("-") and not d.startswith("---")]
+    raw_added = [d[1:] for d in diff if d.startswith("+") and not d.startswith("+++")]
+    if not raw_removed or not raw_added:
+        return raw_removed, raw_added
+
+    # 한 줄 raise 인 경우 기존 동작 유지 (S1, D01)
+    if (
+        len(raw_removed) == 1
+        and len(raw_added) == 1
+        and re.match(r"^\s*raise\b", raw_removed[0])
+        and re.match(r"^\s*raise\b", raw_added[0])
+    ):
+        try:
+            tree_r = ast.parse(textwrap.dedent(raw_removed[0]))
+            tree_a = ast.parse(textwrap.dedent(raw_added[0]))
+            if (
+                len(tree_r.body) == 1
+                and isinstance(tree_r.body[0], ast.Raise)
+                and len(tree_a.body) == 1
+                and isinstance(tree_a.body[0], ast.Raise)
+            ):
+                return raw_removed, raw_added
+        except (SyntaxError, ValueError):
+            pass
+
+    # 여러 줄 diff 에서 문맥(context) 줄을 포함해 raise 문 복원 시도
+    multi_raise = _extract_multiline_raise_diff(diff)
+    if multi_raise is not None:
+        return multi_raise
+
+    return raw_removed, raw_added
 
 
-RAISE_CALL = re.compile(r"^\s*raise\s+([\w.]+)\((.*)\)\s*$")
-
-
-def _message_only(removed: str, added: str) -> bool:
-    """두 줄이 같은 예외를 raise 하고, 인자만 문자열 리터럴 · None 사이에서 바뀌었는가."""
-    a, b = RAISE_CALL.match(removed), RAISE_CALL.match(added)
-    if not (a and b) or a.group(1) != b.group(1):
-        return False
+def _message_only(removed: str | list[str], added: str | list[str]) -> bool:
+    """두 코드 조각이 같은 예외를 raise 하고, 인자만 문자열 리터럴 · None 사이에서 바뀌었는가."""
+    code_a = removed if isinstance(removed, str) else "\n".join(removed)
+    code_b = added if isinstance(added, str) else "\n".join(added)
     try:
-        va, vb = ast.literal_eval(a.group(2) or "None"), ast.literal_eval(b.group(2) or "None")
-    except (ValueError, SyntaxError):
+        mod_a = ast.parse(textwrap.dedent(code_a).strip())
+        mod_b = ast.parse(textwrap.dedent(code_b).strip())
+    except (SyntaxError, ValueError):
         return False
-    return all(v is None or isinstance(v, str) for v in (va, vb))
+    if len(mod_a.body) != 1 or len(mod_b.body) != 1:
+        return False
+    ra, rb = mod_a.body[0], mod_b.body[0]
+    if not isinstance(ra, ast.Raise) or not isinstance(rb, ast.Raise):
+        return False
+    if ra.cause is not None or rb.cause is not None:
+        return False
+    ca, cb = ra.exc, rb.exc
+    if not isinstance(ca, ast.Call) or not isinstance(cb, ast.Call):
+        return False
+    if ast.dump(ca.func) != ast.dump(cb.func):
+        return False
+    if ca.keywords or cb.keywords:
+        return False
+    if len(ca.args) > 1 or len(cb.args) > 1:
+        return False
+
+    def _arg_val(call: ast.Call):
+        if not call.args:
+            return None
+        arg = call.args[0]
+        if not isinstance(arg, ast.Constant):
+            return ...
+        return arg.value
+
+    va, vb = _arg_val(ca), _arg_val(cb)
+    if va is ... or vb is ...:
+        return False
+    return (va is None or isinstance(va, str)) and (vb is None or isinstance(vb, str))
 
 
 def equivalent(rule: str, removed: list[str], added: list[str]) -> bool:
     """어댑터가 아는 등가 규칙. 모르는 규칙이면 거짓(제외하지 않음)."""
     if rule == "raise-message":
-        return len(removed) == 1 and len(added) == 1 and _message_only(removed[0], added[0])
+        if not removed or not added:
+            return False
+        return _message_only(removed, added)
     return False
 
 

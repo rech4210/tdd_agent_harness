@@ -14,7 +14,9 @@ required_top_level = ["domain"]                          # 전체 게이트에�
 checks = ["source_tree", "layers", "never_import", "inner", "test_frameworks", "top_level"]
 # 테스트 도구는 소스에서 import 하지 않는다 (어댑터 언어의 최상위 모듈 이름)
 test_frameworks = ["pytest", "_pytest", "hypothesis", "unittest", "coverage", "mutmut", "pytest_bdd"]
-# 이름의 마지막 두 마디로 금지하는 호출
+# 이름의 마지막 두 마디로 금지하는 호출. 항목은 한 마디(예: ["open"])일 수 있으며, 전체 이름이 정확히 그 단어일 때만 매칭된다.
+# Python 어댑터에서는 최상위 builtins.<name>(import builtins as b 또는 from builtins import open as o 포함) 사용도 <name>으로 취급되어 한 마디 항목에 차단된다.
+# p.open이나 os.open 같은 다른 객체의 메서드는 매칭되지 않는다.
 forbidden_calls = [
   ["datetime", "now"], ["datetime", "utcnow"], ["datetime", "today"],
   ["date", "today"], ["time", "time"], ["time", "monotonic"],

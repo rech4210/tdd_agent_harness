@@ -27,6 +27,7 @@ from pathlib import Path
 
 from adapter_loader import load_adapter
 from events import log_event, now_utc
+from evidence import check_dirty
 from arch import check_architecture
 from paths import ARCHITECTURE, GATES, ROOT, SLICES
 from traceability import check_traceability
@@ -312,6 +313,14 @@ def main() -> int:
             merged_gates.append(dict(g))
     gates = merged_gates
 
+    only = {g.strip() for g in args.only.split(",") if g.strip()}
+    if only:
+        defined_ids = {g["id"] for g in gates}
+        unknown = only - defined_ids
+        if unknown:
+            print(f"정의되지 않은 게이트: {', '.join(sorted(unknown))}", file=sys.stderr)
+            return 2
+
     if args.feedback:
         feedback_gates = gates_doc.get("harness", {}).get("feedback_gates")
         if not isinstance(feedback_gates, list) or not feedback_gates:
@@ -327,15 +336,50 @@ def main() -> int:
                 print(f"feedback_gates 에 커버리지 종류 게이트 '{gid}' 를 포함할 수 없습니다.", file=sys.stderr)
                 return 2
 
-        if args.only:
-            only = {g.strip() for g in args.only.split(",") if g.strip()}
+        if only:
             diff_gates = only - set(feedback_gates)
             if diff_gates:
                 print(f"--only 에 feedback_gates 밖의 게이트가 포함되어 있습니다: {diff_gates}", file=sys.stderr)
                 return 2
 
     GATE_ENV.update({k: str(v) for k, v in gates_doc.get("env", {}).items()})
-    only = {g.strip() for g in args.only.split(",") if g.strip()}
+
+    # HD-28 0a: 게이트를 돌리기 전에 --base 를 전체 해시로 푼다
+    p_base = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{args.base}^{{commit}}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if p_base.returncode != 0:
+        print(f"기준 커밋을 찾을 수 없다: {args.base}", file=sys.stderr)
+        return 2
+    base_sha = p_base.stdout.strip()
+    args.base = base_sha
+
+    p_head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if p_head.returncode != 0:
+        print("HEAD 커밋을 찾을 수 없다", file=sys.stderr)
+        return 2
+    target_sha = p_head.stdout.strip()
+    dirty = check_dirty(ROOT)
+
+    upstream_file = ROOT / "harness" / "UPSTREAM"
+    harness_version = None
+    if upstream_file.is_file():
+        text = upstream_file.read_text(encoding="utf-8", errors="replace").strip()
+        if text:
+            harness_version = text.splitlines()[0].strip()
+
     target_only = only if only else (set(feedback_gates) if args.feedback else set())
 
     # 이전 실행의 산출물을 지운다. 남겨 두면 G3 · G6 이 지난 결과를 읽고 통과할 수 있다
@@ -448,9 +492,31 @@ def main() -> int:
         print(f"\n피드백 보고서: {fb_path.relative_to(ROOT)}  →  {verdict}")
         return 0 if all_passed else 1
 
+    if only:
+        scope = {"only": sorted(only)}
+    elif args.slice:
+        scope = {"slice": args.slice}
+    else:
+        scope = "full"
+
+    if all_passed:
+        base_verdict = "PARTIAL PASS" if only else ("SLICE PASS" if args.slice else "ALL PASS")
+    else:
+        base_verdict = "FAIL"
+
+    evidence = {
+        "schema": 1,
+        "target_sha": target_sha,
+        "base_sha": base_sha,
+        "dirty": dirty,
+        "harness_version": harness_version,
+        "scope": scope,
+        "exit_code": 0 if all_passed else 1,
+        "verdict": base_verdict,
+    }
     report = json.dumps(
         {"wo": args.wo, "slice": args.slice, "role": args.role, "cause": args.cause, "base": args.base, "started": started,
-         "passed": all_passed, "gates": results},
+         "passed": all_passed, "gates": results, "evidence": evidence},
         indent=2,
         ensure_ascii=False,
     )
@@ -478,7 +544,7 @@ def main() -> int:
         run_file=run_file.relative_to(ROOT).as_posix(),
     )
     skipped = [r["id"] for r in results if r["passed"] is None]
-    verdict = ("SLICE PASS" if args.slice else "ALL PASS") if all_passed else "FAIL"
+    verdict = base_verdict
     if skipped:
         verdict += f"  (SKIP: {', '.join(skipped)})"
     print(f"\n보고서: {REPORT.relative_to(ROOT)}  →  {verdict}")

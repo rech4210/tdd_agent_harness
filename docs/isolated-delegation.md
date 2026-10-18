@@ -4,6 +4,8 @@
 
 이 절차는 어떤 에이전트 도구에도 의존하지 않는다. 사람이 여는 대화형 세션, 에이전트 CLI의 비대화형 모드, 위임 도구 중 무엇을 써도 된다.
 
+하네스가 다루는 위협 모델과 정보 분리 범위, 잔여 위험 계약은 [위협 모델](threat-model.md)을 참고한다.
+
 ## 1. 절차
 
 | # | 단계 | 할 일 | 확인 |
@@ -47,7 +49,27 @@ git -C "$WORK" diff --cached --stat HEAD                   # 허용 밖 변경�
 git apply --check "$PATCH" && git apply "$PATCH"           # main 에서
 ```
 
-Windows PowerShell에서는 `git archive --format=zip -o base.zip $BASE -- <경로>` 후 `Expand-Archive`를 쓴다. Core 추출 후에는 `harness workspace`가 2 · 3 · 6단계를 맡는다(예정).
+Windows PowerShell에서는 `git archive --format=zip -o base.zip $BASE -- <경로>` 후 `Expand-Archive`를 쓴다. 0b 도입 후에는 `harness/workspace.py plan`으로 생성된 계획을 소비하여 독립 저장소를 구성하고 제공 파일을 대조한다.
+
+### 2.1 계획 소비 및 제공 파일 대조 절차
+
+1. **계획 생성**: `python harness/workspace.py plan --base <base> --profile <profile> [--config config/workspace.toml]` 명령으로 제공할 파일 목록(`files`: `path`, `blob`, `mode`)이 담긴 계획 JSON을 얻는다.
+2. **독립 저장소 추출 및 구성**:
+   - 계획의 `files`에 명시된 파일만 기준 커밋의 blob(`git cat-file blob <blob>`)에서 직접 꺼내 독립 디렉터리에 기록한다.
+   - archive 추출을 사용할 경우 `.gitattributes`의 `export-ignore`로 파일이 누락되거나 `export-subst`로 내용이 변환될 수 있으며, 이러한 누락·변환을 포함하여 어떠한 불일치라도 탐지되면 **즉시 배포를 중단**한다. 자동 폴백(대체)하여 작업을 이어나가지 않는다. 리드는 실패 후 별도의 raw-blob 직접 추출을 새로 시도할 수 있으나, 이 경우에도 모든 대조 검증 절차를 처음부터 완전히 다시 수행해야 하며 실패 후의 자동 속행은 허용되지 않는다.
+   - 추출 후 독립 디렉터리에서 새 Git 저장소를 초기화(`git init`)하고 첫 커밋을 생성한다. 원본 `.git`, alternates(`objects/info/alternates`), 공유 objects(`commondir`), remote 설정을 일체 이어받지 않아 과거 이력과 보류 blob이 독립 저장소에 남지 않도록 한다.
+   - **Git 변환 방지 및 초기 설정**: 워커의 diff 기준 커밋이 왜곡되는 것을 방지하기 위해 새 저장소의 `core.autocrlf`를 `false`로 설정하고(`git config core.autocrlf false`), 내용 변환 필터(smudge/clean, eol 등)를 활성화하지 않는다.
+3. **배포 전 대조 검증 (모든 비교 통과 전 배포 금지)**:
+   - 파일 집합, 내용 바이트, 실행 비트(mode), archive 누락·변환 등 **어떠한 불일치라도 발생하면 즉시 배포를 중단**하며, 모든 대조 항목이 100% 일치하여 통과하기 전에는 워커에게 어떠한 파일도 전달하지 않는다.
+   - `core.autocrlf=false` 설정만으로 내용 일치가 보장된다고 가정해서는 안 된다. `.gitattributes`나 전역 필터 설정 등에 의해 `git add` 과정에서 내용이 변환될 수 있다.
+   - 따라서 스테이징 및 첫 커밋 생성 후 다음 항목들을 전수 대조한다:
+     - **파일 집합 대조**: 독립 작업 디렉터리의 실제 파일 집합(새 `.git` 내부 제외)이 계획 JSON의 `files` 경로 목록과 정확히 일치하는지 확인.
+     - **작업 트리 바이트 대조**: 작업 디렉터리 각 파일의 실제 바이트 내용이 계획의 blob 원문과 완전히 일치하는지 확인.
+     - **인덱스 스테이지 대조**: `git ls-files --stage` 결과의 mode뿐만 아니라 **blob ID**까지 계획 항목의 mode 및 blob ID와 일치하는지 대조.
+     - **첫 커밋 blob ID 대조**: 생성된 첫 커밋 트리 내 각 파일의 blob ID가 계획의 blob ID와 정확히 일치하는지 확인하여 `git add`/`commit` 과정에서 어떠한 변환도 일어나지 않았음을 증명.
+     - **실행 비트(mode) 대조**: POSIX 환경에서는 파일 stat의 실행 비트와 `100755`를 대조하며, Windows 환경에서는 파일 시스템의 POSIX 실행 비트 표현 한계가 있으므로 Git index의 스테이지 모드(`git ls-files --stage`의 `100644` / `100755`)를 계획과 대조.
+   - 새 `.git` 자체는 대조 대상에서 제외한다.
+   - 이 격리 절차는 작업 공간 내 제공 파일의 조건을 엄격히 제어하는 것이며, OS 권한으로 원본의 절대경로 읽기까지 물리적으로 차단한다고 주장하지 않는다.
 
 ## 3. 함정
 

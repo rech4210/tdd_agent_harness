@@ -52,7 +52,11 @@ def main() -> int:
     if fetch.returncode != 0:
         print(f"가져오기 실패: {fetch.stderr.strip()}")
         return 1
-    target = git("rev-parse", f"{args.remote}/{args.ref}").stdout.strip()
+    parse = git("rev-parse", "--verify", "-q", "FETCH_HEAD^{commit}")
+    target = parse.stdout.strip()
+    if parse.returncode != 0 or not target:
+        print("대상 커밋을 찾을 수 없다")
+        return 1
     present = [p for p in OWNED if git("cat-file", "-e", f"{target}:{p}").returncode == 0]
 
     new_files = tree(target, present)
@@ -88,7 +92,7 @@ def main() -> int:
             return 1
     RECORD.write_text(target + "\n", encoding="utf-8", newline="\n")
     git("add", "--", RECORD.relative_to(ROOT).as_posix())
-    print(f"\n{args.remote}/{args.ref} ({target[:10]}) 의 {', '.join(present)} 를 가져왔다. 확인 후 커밋하고, doctor · 회귀 세트를 다시 돌린다:")
+    print(f"\n{args.remote} {args.ref} ({target[:10]}) 의 {', '.join(present)} 를 가져왔다. 확인 후 커밋하고, doctor · 회귀 세트를 다시 돌린다:")
     print("  python harness/doctor.py")
     return 0
 

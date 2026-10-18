@@ -68,6 +68,10 @@ def file_facts(path: Path, src_root: Path) -> dict:
             name = _dotted(node, aliases)
             if name:
                 uses.add(f"{node.lineno}:{name}")
+                # 최상위 builtins.<이름> 은 내장 이름도 함께 낸다 (한 마디 금지 항목 대응)
+                parts = name.split(".")
+                if len(parts) == 2 and parts[0] == "builtins" and parts[1]:
+                    uses.add(f"{node.lineno}:{parts[1]}")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             fn = node.func.id
             if fn in {"eval", "exec", "compile"}:

@@ -9,6 +9,11 @@
 adapter = "python"        # adapters/<이름>/adapter.py. Core 는 언어를 모르고, 도구 실행과 결과 해석은 어댑터가 한다
 locked = ["tests/**", "specs/**"]   # H3 에서 사람이 승인 · 잠그는 경로: 테스트와 명세 (dev/DECISIONS.md HD-02). 소스 옆에 테스트를 두는 언어는 glob 으로
 feedback_gates = ["G2", "G7"]   # 판정 전 피드백으로 구현자에게 돌려줄 게이트, 커버리지는 넣지 않는다 (HD-24)
+# 병합 강제 (HD-28 0a): 이 ref 로 가는 push 전에 게이트를 다시 돌린다 (python harness/prepush.py --install). 서버 쪽 강제는 CI 필수 체크 (docs/enforcement.md)
+# [enforcement] 는 [harness] 아래가 아니라 별도 표로 둔다:
+# [enforcement]
+# protected_refs = ["refs/heads/main"]
+# role = "implementer"
 # base_tag = "{compact}-base"   # KPI 의 지시 시각 = 이 태그의 커밋 시각. {compact} = 작업 지시서 ID 에서 '-' 를 뺀 것
 
 # 모든 게이트 하위 프로세스에 강제로 넘기는 환경변수.
@@ -36,6 +41,8 @@ kind = "traceability"
 requirements = ["specs/*/spec.md"]          # Spec Kit 배치. FR-### · INV-# 를 정의하는 파일 (HTML 주석 안은 무시)
 decisions = ["reports/decisions.md"]        # D-## 를 정의하는 파일 (templates/decision-record.md)
 modules = ["tests/**/test_*.py"]            # 머리말(guards · technique · checklist)이 있어야 하는 테스트 모듈
+defaults = ["docs/DEFAULTS.md"]     # DEF-## 를 정의하는 파일 (경계 표 승격 근거, 공통 기본값)
+# product_invariants = ["docs/PRODUCT.md"]  # INV-G# (제품 불변식)를 정의하는 파일. 설정하면 경계 표 승격 근거로 인용 가능, D-## 와 쉼표로 섞기 가능 (HD-27)
 # 검사: header · id_format · undecided · forward · backward · assumptions · clarifications · needs_clarification (docs/sdd-integration.md)
 # 아직 테스트로 지키지 않는 요구: 이유와 사람 구간을 적는다. 슬라이스에서는 보고서에 남고, 전체 게이트(릴리스)에서는 실패한다 (HD-07)
 # deferred = { "FR-007" = "H2: 정밀도 미결정, 다음 슬라이스" }

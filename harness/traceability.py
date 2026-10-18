@@ -11,6 +11,7 @@
 - backward    : guards 에 인용한 ID 가 명세 · 결정 기록에 정의되어 있다
 - assumptions : 명세의 가정(Assumptions) 항목마다 결정(D-) 승격 또는 사람 구간(H) 표시가 있다 (E3)
 - duplicate   : 명세 · 결정 기록에 같은 ID 가 두 번 이상 정의되지 않았다
+- boundaries  : 경계 표의 마지막 칸(승격 근거)이 유효한 근거(D-## · INV-G# · 표본 · 피해 · DEF-## · 계약 밖)이다
 
 모든 검사는 대상이 0개이면 실패한다 (공허한 참 방지).
 """
@@ -29,6 +30,7 @@ DEFAULT_IDS = {
     "invariant": r"INV-\d+",
     "decision": r"D-\d+",
     "open": r"O-\d+",
+    "product_invariant": r"INV-G\d+",
 }
 DEFAULT_ASSUMPTIONS_HEADING = r"^#+\s*(Assumptions|가정)\b"
 DEFAULT_RESOLVED = r"(?:→|->)\s*(D-\d+|H\d+)\b"
@@ -42,6 +44,9 @@ DEFAULT_REQUIREMENT_DEF = (
 )
 DEFAULT_DEFAULTS_DEF = (
     r"^\s*(?:#+\s*\*{0,2}(DEF-\d+)\*{0,2}(?=\s|:|\.|$|[^\w-])|\|\s*\*{0,2}(DEF-\d+)\*{0,2}\s*\|)"
+)
+DEFAULT_PRODUCT_INVARIANT_DEF = (
+    r"^\s*(?:#+\s*\*{0,2}(INV-G\d+)\*{0,2}(?=\s|:|\.|$|[^\w-])|\|\s*\*{0,2}(INV-G\d+)\*{0,2}\s*\|)"
 )
 
 
@@ -246,6 +251,28 @@ def check_traceability(cfg: dict, root: Path) -> tuple[bool, list[str], list[str
                     def_id = def_id.strip("* ")
                     if re.fullmatch(r"DEF-\d+", def_id):
                         defined_def.add(def_id)
+
+    product_files = _glob(root, cfg.get("product_invariants", []))
+    defined_pi: set[str] = set()
+    pi_pat = ids["product_invariant"]
+    if "product_invariant_definition" in cfg:
+        pi_def_str = cfg["product_invariant_definition"]
+    else:
+        pi_def_str = rf"^\s*(?:#+\s*\*{{0,2}}({pi_pat})\*{{0,2}}(?=\s|:|\.|$|[^\w-])|\|\s*\*{{0,2}}({pi_pat})\*{{0,2}}\s*\|)"
+    pi_def_pattern = re.compile(pi_def_str)
+    for p in product_files:
+        rel = p.relative_to(root).as_posix()
+        p_text, unclosed = strip_code_blocks(strip_html_comments(p.read_text(encoding="utf-8", errors="replace")))
+        if unclosed is not None:
+            bad.append(f"[형식] {rel}:{unclosed} 닫히지 않은 코드 블록")
+        for line in p_text.splitlines():
+            m = pi_def_pattern.search(line)
+            if m:
+                pi_id = m.group(m.lastindex) if m.lastindex else m.group(0)
+                if pi_id:
+                    pi_id = pi_id.strip("* ")
+                    if re.fullmatch(pi_pat, pi_id):
+                        defined_pi.add(pi_id)
 
     if "duplicate" in checks:
         for p, f_defs in file_defs.items():
@@ -567,6 +594,38 @@ def check_traceability(cfg: dict, root: Path) -> tuple[bool, list[str], list[str
                         # ⑤ 계약 밖
                         if last_cell == "계약 밖" or (last_cell.startswith("계약 밖:") and bool(last_cell[len("계약 밖:"):].strip())):
                             out_count += 1
+                            continue
+
+                        # ⑥ INV-G#
+                        if re.fullmatch(ids["product_invariant"], last_cell):
+                            if last_cell in defined_pi:
+                                in_count += 1
+                            else:
+                                bad.append(f"[경계] {rel}:{lineno} 정의되지 않은 불변식: '{last_cell}'")
+                            continue
+
+                        # ⑦ D-## · INV-G# (쉼표 구분 복수)
+                        if "," in last_cell:
+                            raw_parts = last_cell.split(",")
+                            items = [p.strip() for p in raw_parts]
+                            if any(not p for p in items) or not all(
+                                re.fullmatch(ids["decision"], p) or re.fullmatch(ids["product_invariant"], p)
+                                for p in items
+                            ):
+                                bad.append(f"[경계] {rel}:{lineno} 승격 근거 올바르지 않음: '{last_cell}'")
+                                continue
+                            has_missing = False
+                            for item in items:
+                                if re.fullmatch(ids["decision"], item):
+                                    if item not in defined_dec:
+                                        bad.append(f"[경계] {rel}:{lineno} 결정 기록에 정의되지 않은 결정: '{item}'")
+                                        has_missing = True
+                                elif re.fullmatch(ids["product_invariant"], item):
+                                    if item not in defined_pi:
+                                        bad.append(f"[경계] {rel}:{lineno} 정의되지 않은 불변식: '{item}'")
+                                        has_missing = True
+                            if not has_missing:
+                                in_count += 1
                             continue
 
                         bad.append(f"[경계] {rel}:{lineno} 승격 근거 올바르지 않음: '{last_cell}'")
