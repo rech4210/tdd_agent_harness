@@ -243,6 +243,21 @@ def test_report_check(gate: dict) -> tuple[bool, str]:
     return not problems, summary + (" → " + "; ".join(problems) if problems else "")
 
 
+def count_failed_cases(path: str | Path) -> int | None:
+    """JUnit XML 보고서에서 failure 또는 error 자식을 가진 testcase 수를 센다. 파일이 없으면 None."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = ROOT / p
+    if not p.exists() or not p.is_file():
+        return None
+    try:
+        root = ET.parse(p).getroot()
+        cases = list(root.iter("testcase"))
+        return sum(1 for c in cases if c.find("failure") is not None or c.find("error") is not None)
+    except Exception:
+        return None
+
+
 def _g0_json(g0: dict | None) -> dict:
     # C3: 출력 텍스트(잘릴 수 있음) 대신 G0 결과 파일을 읽는다. 파일이 없으면 예전 방식으로 읽는다
     g0_file = ROOT / "reports" / "g0_report.json"
@@ -526,6 +541,17 @@ def main() -> int:
     run_file = RUNS / f"{started.replace(':', '')}_{args.wo or 'none'}_{args.role}.json"
     run_file.write_text(report, encoding="utf-8", newline="\n")
     g0 = next((r for r in results if r["id"] == "G0"), None)
+    failed_cases: int | None = None
+    for r in results:
+        g = next((x for x in gates if x["id"] == r["id"]), None)
+        if g and "test_report" in g:
+            cnt = count_failed_cases(ROOT / g["test_report"])
+            if cnt is not None:
+                if failed_cases is None:
+                    failed_cases = cnt
+                else:
+                    failed_cases += cnt
+
     log_event(
         "gate_run",
         wo=args.wo,
@@ -540,6 +566,7 @@ def main() -> int:
         g0_violations=g0_violation_count(g0),
         review_required=g0_review_required(g0),
         skipped=[r["id"] for r in results if r["passed"] is None],
+        failed_cases=failed_cases,
         seconds=round(sum(r["seconds"] for r in results), 1),
         run_file=run_file.relative_to(ROOT).as_posix(),
     )

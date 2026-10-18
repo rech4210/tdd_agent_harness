@@ -2,7 +2,7 @@
 
 제약으로 코딩 에이전트의 작업을 신뢰할 수 있게 만드는 하네스: **잠긴 테스트 · 세션 밖 게이트 판정 · 역할 분리**.
 
-현재 버전: `core-v0.5` · 상태: 실험 단계 · 라이선스: [MIT](LICENSE)
+현재 버전: `core-v0.5.1` · 상태: 실험 단계 · 라이선스: [MIT](LICENSE)
 
 ---
 
@@ -147,10 +147,10 @@ python harness/run_gates.py --role implementer --base <기준 커밋>
 
 </details>
 
-### 7.3 v0.5 주요 추가 사항
+### 7.3 v0.5 · v0.5.1 주요 추가 사항
 
 <details>
-<summary><b>v0.5 신규 기능 및 개선 내역 접기/펼치기 (클릭)</b></summary>
+<summary><b>v0.5 · v0.5.1 신규 기능 및 개선 내역 접기/펼치기 (클릭)</b></summary>
 
 | 영역 | 내용 | 사용 명령 및 참고 문서 |
 |:---|:---|:---|
@@ -158,6 +158,7 @@ python harness/run_gates.py --role implementer --base <기준 커밋>
 | **격리 위임 계획** | 구현 에이전트 작업 공간을 커밋된 입력만으로 구성하여 미공개 자료 및 타 브랜치 유출 방지 | `python harness/workspace.py plan --base <커밋> --profile <이름>` — [격리 위임](docs/isolated-delegation.md) |
 | **위협 모델 계약** | 하네스가 통제하는 지름길과 잔여 한계, 로컬 훅과 원격 서버 강제의 차이 명문화 | [위협 모델](docs/threat-model.md) |
 | **Python 어댑터 고도화** | 여러 줄 `raise`의 메시지 변이도 등가로 제외(diff 문맥 밖 제외 안 함), `builtins` 별칭 호출 차단 강화 | 설정 변경 없음 |
+| **KPI 기록 (v0.5.1)** | 검토 회차 · 예산 연장/중단 · 실패 사례 수 기록, 모델 사용량 이벤트(`harness/usage.py`), 역할 × 에이전트 사용량 표, 작업 전 분류(티어 · 위험도)가 있는 작업만 쓰는 기본값 보정 **제안**(설정은 바꾸지 않음). 게이트 판정은 바뀌지 않음 | `python harness/mark.py classify "<근거>" --wo <작업> --tier <T1·T2·T3> --risk <low·medium·high> --basis prospective --by <확인자>`<br>`python harness/kpi.py` |
 
 </details>
 
@@ -168,7 +169,7 @@ python harness/run_gates.py --role implementer --base <기준 커밋>
 - **검증 범위**:
   - Python 어댑터 제공
   - 실제 실험 프로젝트 2곳에서 사용
-  - `harness/selftest/` 자체 검증 테스트 27개 전수 통과
+  - `harness/selftest/` 자체 검증 테스트 29개 전수 통과 (공개본 기준)
   - 실험 프로젝트 대상 회귀 검증(판정 동일성) 4/4 통과
 - **알려진 한계**:
   - 현재 단일 언어(Python) 어댑터만 지원합니다.

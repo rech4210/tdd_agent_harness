@@ -9,6 +9,10 @@
   python harness/mark.py wait-start DEC --wo WO-AK01   # 자동 대기 시작 (lead)
   python harness/mark.py wait-end DEC --wo WO-AK01 --decisions 4 # 자동 대기 끝 (lead)
   python harness/mark.py note "..." --wo WO-02         # 메모
+  python harness/mark.py review codex --round 1 --defects 2 --wo WO-02  # 검토 기록
+  python harness/mark.py budget-extend "이유" --wo WO-02   # 예산 연장
+  python harness/mark.py budget-stop "이유" --wo WO-02     # 예산 중단
+  python harness/mark.py classify "근거" --wo WO-02 --tier T2 --risk low --basis prospective --by user  # 작업 지시서 분류
 """
 
 from __future__ import annotations
@@ -27,11 +31,21 @@ STAGES = {
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["start", "end", "note", "wait-start", "wait-end"])
-    ap.add_argument("value", help="단계(H1~H11, QA, DEC, MERGE) 또는 메모")
+    ap.add_argument("action", choices=["start", "end", "note", "wait-start", "wait-end", "review", "budget-extend", "budget-stop", "classify"])
+    ap.add_argument("value", help="단계(H1~H11, QA, DEC, MERGE), 검토자, 메모 또는 이유")
     ap.add_argument("--wo", default="")
     ap.add_argument("--decisions", type=int, default=0, help="결정 수 (0 이상)")
+    ap.add_argument("--round", type=int, default=None, help="검토 회차 (0 이상)")
+    ap.add_argument("--defects", type=int, default=0, help="계약 안 결함 수 (0 이상)")
+    ap.add_argument("--tier", default=None, help="티어 (T1|T2|T3)")
+    ap.add_argument("--risk", default=None, help="위험도 (low|medium|high)")
+    ap.add_argument("--basis", default=None, help="근거 (prospective|retrospective)")
+    ap.add_argument("--by", default=None, help="확인자")
     args = ap.parse_args()
+
+    if args.action != "classify" and any(x is not None for x in (args.tier, args.risk, args.basis, args.by)):
+        print("--tier, --risk, --basis, --by는 classify에서만 쓸 수 있다")
+        return 2
 
     if args.action in ("start", "end", "wait-start", "wait-end") and args.value not in STAGES:
         print(f"알 수 없는 단계: {args.value}. 가능한 값: {sorted(STAGES)}")
@@ -45,6 +59,66 @@ def main() -> int:
     if args.action != "wait-end" and args.decisions != 0:
         print("--decisions는 wait-end에서만 쓸 수 있다")
         return 2
+
+    if args.action == "classify":
+        if not args.value or not args.value.strip():
+            print("근거가 필요하다")
+            return 2
+        if not args.wo or not args.wo.strip():
+            print("--wo가 필요하다")
+            return 2
+        if args.tier not in ("T1", "T2", "T3"):
+            print(f"--tier는 T1, T2, T3 중 하나여야 한다: {args.tier}")
+            return 2
+        if args.risk not in ("low", "medium", "high"):
+            print(f"--risk는 low, medium, high 중 하나여야 한다: {args.risk}")
+            return 2
+        if args.basis not in ("prospective", "retrospective"):
+            print(f"--basis는 prospective, retrospective 중 하나여야 한다: {args.basis}")
+            return 2
+        if not args.by or not args.by.strip():
+            print("--by(확인자)가 필요하다")
+            return 2
+        e = log_event(
+            "wo_class",
+            wo=args.wo,
+            tier=args.tier,
+            risk=args.risk,
+            reason=args.value.strip(),
+            basis=args.basis,
+            confirmed_by=args.by.strip(),
+        )
+        print(f"기록: {e['ts']} {e['kind']} {args.wo} tier={args.tier} risk={args.risk} basis={args.basis} by={args.by}")
+        return 0
+
+    if args.action == "review":
+        if not args.value or not args.value.strip():
+            print("검토자 이름이 필요하다")
+            return 2
+        if args.round is None or args.round < 0:
+            print(f"--round는 0 이상의 정수여야 한다: {args.round}")
+            return 2
+        if args.defects is None or args.defects < 0:
+            print(f"--defects는 0 이상의 정수여야 한다: {args.defects}")
+            return 2
+        e = log_event(
+            "review_run",
+            reviewer=args.value.strip(),
+            round=args.round,
+            contract_defects=args.defects,
+            wo=args.wo,
+        )
+        print(f"기록: {e['ts']} {e['kind']} {args.value} round={args.round} defects={args.defects} {args.wo}")
+        return 0
+
+    if args.action in ("budget-extend", "budget-stop"):
+        if not args.value or not args.value.strip():
+            print("이유가 필요하다")
+            return 2
+        kind = "budget_extend" if args.action == "budget-extend" else "budget_stop"
+        e = log_event(kind, reason=args.value.strip(), wo=args.wo)
+        print(f"기록: {e['ts']} {e['kind']} {args.value} {args.wo}")
+        return 0
 
     if args.action in ("wait-start", "wait-end"):
         open_count = 0

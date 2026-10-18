@@ -10,11 +10,13 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from events import ROOT, read_events
 
@@ -189,6 +191,41 @@ def delegation_feedback_count(wo: str, default_count: int) -> str:
         return "기록 없음"
 
 
+VALID_TIERS = {"T1", "T2", "T3"}
+VALID_RISKS = {"low", "medium", "high"}
+VALID_BASES = {"prospective", "retrospective"}
+
+
+def wo_class_for(events: list[dict], wo: str) -> dict[str, str] | None:
+    """작업 지시서의 유효한 분류 정보 {"tier", "risk", "basis"}를 반환한다."""
+    last_prospective = None
+    last_retrospective = None
+
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        if e.get("kind") != "wo_class" or e.get("wo") != wo:
+            continue
+        by = e.get("confirmed_by")
+        if not isinstance(by, str) or not by.strip():
+            continue
+        tier = e.get("tier")
+        risk = e.get("risk")
+        basis = e.get("basis")
+        if tier not in VALID_TIERS or risk not in VALID_RISKS or basis not in VALID_BASES:
+            continue
+
+        item = {"tier": str(tier), "risk": str(risk), "basis": str(basis)}
+        if basis == "prospective":
+            last_prospective = item
+        elif basis == "retrospective":
+            last_retrospective = item
+
+    if last_prospective is not None:
+        return last_prospective
+    return last_retrospective
+
+
 def per_wo(events: list[dict]) -> list[dict]:
     by_wo: dict[str, list[dict]] = defaultdict(list)
     for e in events:
@@ -196,16 +233,22 @@ def per_wo(events: list[dict]) -> list[dict]:
             by_wo[e["wo"]].append(e)
     rows = []
     for wo, evs in sorted(by_wo.items()):
-        impl = [e for e in evs if e["kind"] == "gate_run" and e["role"] == "implementer"]
+        cf = wo_class_for(events, wo)
+        if cf:
+            basis_str = "작업 전" if cf.get("basis") == "prospective" else "소급"
+            class_str = f"{cf.get('tier')} · {cf.get('risk')} · {basis_str}"
+        else:
+            class_str = "—"
+        impl = [e for e in evs if e.get("kind") == "gate_run" and e.get("role") == "implementer"]
         fb_runs = [e for e in evs if e.get("kind") == "feedback_run"]
         fb_count = delegation_feedback_count(wo, len(fb_runs))
-        green_idx = next((i for i, e in enumerate(impl) if e["passed"] and full_run(e)), None)
-        violations = [e["g0_violations"] or 0 for e in impl if e.get("g0_violations") is not None]
+        green_idx = next((i for i, e in enumerate(impl) if e.get("passed") and full_run(e)), None)
+        violations = [e.get("g0_violations") or 0 for e in impl if e.get("g0_violations") is not None]
         review = sorted({p for e in impl for p in e.get("review_required", [])})
         # 시작점은 지시서 발행(기준 태그) 시각. 태그가 없으면 첫 이벤트로 대신하고 표에 표시한다
         issued = issued_at(wo)
-        first = issued or ts(evs[0])
-        green = ts(impl[green_idx]) if green_idx is not None else None
+        first = issued or (ts(evs[0]) if (evs and evs[0].get("ts")) else datetime.min)
+        green = ts(impl[green_idx]) if (green_idx is not None and impl[green_idx].get("ts")) else None
         wait_text, blocked_count, decisions_sum = wait_stats(evs)
         human = human_minutes(evs)
         slice_id = next((e.get("slice") for e in impl if e.get("slice")), "")
@@ -214,23 +257,37 @@ def per_wo(events: list[dict]) -> list[dict]:
         impl_cause = sum(1 for e in gate_runs if e.get("role") == "implementer" and (e.get("cause") == "implementer" or not e.get("cause")))
         test_cause = sum(1 for e in gate_runs if e.get("cause") == "test" or (not e.get("cause") and e.get("role") == "test_author"))
         harness_cause = sum(1 for e in gate_runs if e.get("cause") == "harness")
+        review_runs = [e for e in evs if e.get("kind") == "review_run"]
+        round_vals = [e.get("round") for e in review_runs if e.get("round") is not None]
+        review_round = max(round_vals) if round_vals else (len(review_runs) if review_runs else 0)
+        contract_defects = sum(int(e.get("contract_defects") or 0) for e in review_runs)
+        budget_extends = sum(1 for e in evs if e.get("kind") == "budget_extend")
+        budget_stops = sum(1 for e in evs if e.get("kind") == "budget_stop")
+        fc_vals = [e.get("failed_cases") for e in impl if e.get("failed_cases") is not None]
+        failed_cases_str = f"{fc_vals[0]}→{fc_vals[-1]}" if fc_vals else "—"
         rows.append({
             "WO": wo,
+            "분류": class_str,
             # 배정이 다른 슬라이스끼리 비교할 때 섞이지 않도록 모델을 함께 적는다
             "배정 (테스트 / 구현)": f"{a.get('test_author', '?')} / {a.get('implementer', '?')}" if a else "—",
             "구현 실행 수": len(impl),
             "판정 전 피드백 실행 수": fb_count,
             "전체 통과까지 실행 수": (green_idx + 1) if green_idx is not None else "미통과",
-            "첫 실행 통과": "예" if impl and impl[0]["passed"] and full_run(impl[0]) else "아니오",
-            "실패가 가장 많은 게이트": most_common([e["first_failed"] for e in impl if e["first_failed"]]),
+            "첫 실행 통과": "예" if impl and impl[0].get("passed") and full_run(impl[0]) else "아니오",
+            "실패가 가장 많은 게이트": most_common([e.get("first_failed") for e in impl if e.get("first_failed")]),
             "G0 위반(건)": sum(violations),
             "리드타임(분)": (f"{minutes(first, green)}" + ("" if issued else " (태그 없음, 첫 이벤트 기준)")) if green else "—",
-            "기계 실행 시간(분)": round(sum(e["seconds"] for e in impl) / 60, 1),
+            "기계 실행 시간(분)": round(sum(e.get("seconds", 0) for e in impl) / 60, 1),
             "사람 검토 필요 경로": ", ".join(review) or "없음",
             "구현자 원인 회차": str(impl_cause),
             "테스트 · 재잠금 원인 회차": str(test_cause),
             "하네스 원인 회차": str(harness_cause),
             "max_rounds 산정 회차": str(impl_cause),
+            "검토 회차": str(review_round),
+            "계약 안 결함": str(contract_defects),
+            "예산 연장": str(budget_extends),
+            "예산 중단": str(budget_stops),
+            "실패 사례 (첫→마지막)": failed_cases_str,
             "사람 대기(분, 자동)": wait_text,
             "막힌 지점 수": blocked_count,
             "결정 수": decisions_sum,
@@ -289,6 +346,261 @@ def table(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def usage_by_role_agent(events: list[dict]) -> list[dict]:
+    """역할 × 에이전트별 모델 사용량 집계."""
+    seen_runs = set()
+    deduped = []
+    for e in events:
+        if not isinstance(e, dict) or e.get("kind") != "model_usage":
+            continue
+        agent = e.get("agent")
+        run_id = e.get("run_id")
+        run_key = (agent, run_id) if run_id is not None else (agent, id(e))
+        if run_key in seen_runs:
+            continue
+        seen_runs.add(run_key)
+        deduped.append(e)
+
+    by_group: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for e in deduped:
+        role = e.get("role", "")
+        agent = e.get("agent", "")
+        by_group[(role, agent)].append(e)
+
+    rows = []
+    for (role, agent), runs in sorted(by_group.items()):
+        n_runs = len(runs)
+
+        def format_stat(vals: list[int | None]) -> str:
+            known = [v for v in vals if v is not None]
+            k_cnt = len(known)
+            k_sum = sum(known)
+            if k_cnt == n_runs:
+                return str(k_sum)
+            return f"{k_sum} 부분 (확인 {k_cnt}/{n_runs})"
+
+        calls_stat = format_stat([e.get("model_calls") for e in runs])
+
+        in_vals = []
+        out_vals = []
+        cache_vals = []
+        cache_in_input_flags = []
+        for e in runs:
+            toks = e.get("tokens")
+            if isinstance(toks, dict):
+                in_vals.append(toks.get("input"))
+                out_vals.append(toks.get("output"))
+                cache_vals.append(toks.get("cache_read"))
+                if "cache_in_input" in toks and toks["cache_in_input"] is not None:
+                    cache_in_input_flags.append(toks["cache_in_input"])
+            else:
+                in_vals.append(None)
+                out_vals.append(None)
+                cache_vals.append(None)
+
+        in_stat = format_stat(in_vals)
+        out_stat = format_stat(out_vals)
+        cache_stat = format_stat(cache_vals)
+
+        if True in cache_in_input_flags and False not in cache_in_input_flags:
+            cache_in_input_str = "예"
+        elif False in cache_in_input_flags and True not in cache_in_input_flags:
+            cache_in_input_str = "아니오"
+        elif True in cache_in_input_flags and False in cache_in_input_flags:
+            cache_in_input_str = "혼합"
+        else:
+            cache_in_input_str = "—"
+
+        sec_vals = [e.get("seconds") for e in runs if e.get("seconds") is not None and isinstance(e.get("seconds"), (int, float))]
+        if sec_vals:
+            min_val = round(sum(sec_vals) / 60, 1)
+            if len(sec_vals) == n_runs:
+                time_str = f"{min_val}"
+            else:
+                time_str = f"{min_val} 부분 (확인 {len(sec_vals)}/{n_runs})"
+        else:
+            time_str = "—"
+
+        cap_count = 0
+        for e in runs:
+            stop = e.get("stop")
+            if (isinstance(stop, dict) and stop.get("reason") == "cap") or stop == "cap":
+                cap_count += 1
+
+        rows.append({
+            "역할": role,
+            "에이전트": agent,
+            "위임 요청 수": str(n_runs),
+            "모델 내부 호출 수": calls_stat,
+            "입력": in_stat,
+            "출력": out_stat,
+            "캐시": cache_stat,
+            "캐시 입력 포함": cache_in_input_str,
+            "모델 활동 시간(분)": time_str,
+            "상한 도달": str(cap_count),
+        })
+
+    return rows
+
+
+def time_observations(events: list[dict], prospective_only: bool = False) -> dict[tuple, list[dict[str, Any]]]:
+    """이벤트에서 시간 관측치를 묶음별로 추출한다."""
+    seen_runs = set()
+    deduped = []
+    for e in events:
+        if not isinstance(e, dict) or e.get("kind") != "model_usage":
+            continue
+        agent = e.get("agent")
+        run_id = e.get("run_id")
+        run_key = (agent, run_id) if run_id is not None else (agent, id(e))
+        if run_key in seen_runs:
+            continue
+        seen_runs.add(run_key)
+        deduped.append(e)
+
+    valid = []
+    for raw_e in deduped:
+        wo = raw_e.get("wo")
+        cf = wo_class_for(events, wo) if wo else None
+        if prospective_only:
+            if not (cf and cf.get("basis") == "prospective"):
+                continue
+
+        e = dict(raw_e)
+        if cf:
+            if e.get("tier") is None:
+                e["tier"] = cf["tier"]
+            if e.get("risk") is None:
+                e["risk"] = cf["risk"]
+
+        if (
+            e.get("tier") is not None
+            and e.get("risk") is not None
+            and e.get("seconds") is not None
+            and e.get("time_scope") == "model_activity"
+        ):
+            valid.append(e)
+
+    earliest_by_wo_task: dict[tuple, dict] = {}
+    for e in valid:
+        key = (e.get("wo"), e.get("task"))
+        if key not in earliest_by_wo_task:
+            earliest_by_wo_task[key] = e
+        else:
+            prev = earliest_by_wo_task[key]
+            prev_started = prev.get("started") or "9999"
+            curr_started = e.get("started") or "9999"
+            if curr_started < prev_started:
+                earliest_by_wo_task[key] = e
+
+    groups: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    for e in earliest_by_wo_task.values():
+        cond = e.get("condition") if isinstance(e.get("condition"), dict) else {}
+        exec_path = cond.get("exec_path") if cond.get("exec_path") is not None else e.get("exec_path")
+        permission = cond.get("permission") if cond.get("permission") is not None else e.get("permission")
+        group_key = (
+            e.get("tier"),
+            e.get("risk"),
+            e.get("role"),
+            e.get("agent"),
+            e.get("model"),
+            exec_path,
+            permission,
+        )
+        sec = e.get("seconds")
+        val = float(sec)
+
+        stop = e.get("stop") if isinstance(e.get("stop"), dict) else {}
+        cap = e.get("cap") if isinstance(e.get("cap"), dict) else {}
+        stop_reason = stop.get("reason") if isinstance(stop, dict) else (e.get("stop") if isinstance(e.get("stop"), str) else None)
+        is_time_cap = cap.get("kind") == "time" if isinstance(cap, dict) and cap else True
+        censored = (stop_reason == "cap" and is_time_cap)
+
+        task_val = e.get("task") if isinstance(e.get("task"), tuple) else (e.get("wo"), e.get("task"))
+
+        groups[group_key].append({
+            "task": task_val,
+            "value": val,
+            "censored": censored,
+        })
+
+    return dict(groups)
+
+
+def p75_proposal(observations: list[dict]) -> dict[str, Any]:
+    """작업당 첫 관측만 유지하고, 상한 도달(censored)을 반영한 p75 보정값을 산정한다."""
+    seen_tasks = set()
+    unique_obs = []
+    for o in observations:
+        if not isinstance(o, dict):
+            continue
+        task = o.get("task")
+        if task not in seen_tasks:
+            seen_tasks.add(task)
+            unique_obs.append(o)
+    n = len(unique_obs)
+    if n < 5:
+        return {"status": "표본 부족", "value": None, "n": n}
+
+    sorted_obs = sorted(
+        unique_obs,
+        key=lambda x: (1 if x.get("censored") else 0, x.get("value") if x.get("value") is not None else float("inf")),
+    )
+    k = math.ceil(0.75 * n)
+    target = sorted_obs[k - 1]
+    if target.get("censored"):
+        return {"status": "산정 불가", "value": None, "n": n}
+    return {"status": "제안", "value": target.get("value"), "n": n}
+
+
+def proposal_section(events: list[dict]) -> str:
+    """기본값 보정 제안 절 내용 생성."""
+    seen_runs = set()
+    unique_usage = []
+    for e in events:
+        if isinstance(e, dict) and e.get("kind") == "model_usage":
+            agent = e.get("agent")
+            run_id = e.get("run_id")
+            run_key = (agent, run_id) if run_id is not None else (agent, id(e))
+            if run_key not in seen_runs:
+                seen_runs.add(run_key)
+                unique_usage.append(e)
+
+    unknown_count = 0
+    unassigned_count = 0
+    for e in unique_usage:
+        wo = e.get("wo")
+        cf = wo_class_for(events, wo) if wo else None
+        tier = e.get("tier") if e.get("tier") is not None else (cf.get("tier") if cf else None)
+        risk = e.get("risk") if e.get("risk") is not None else (cf.get("risk") if cf else None)
+        has_prospective = (cf is not None and cf.get("basis") == "prospective")
+
+        if tier is None or risk is None:
+            unknown_count += 1
+        elif not has_prospective:
+            unassigned_count += 1
+
+    groups = time_observations(events, prospective_only=True)
+    rows = []
+    for group_key in sorted(groups.keys(), key=lambda k: tuple(str(x) for x in k)):
+        obs_list = groups[group_key]
+        prop = p75_proposal(obs_list)
+        val_str = "—"
+        if prop.get("value") is not None:
+            val = prop["value"]
+            val_str = f"{int(val)}" if isinstance(val, (int, float)) and val == int(val) else f"{val}"
+        group_str = " · ".join(str(k) if k is not None else "—" for k in group_key)
+        rows.append({
+            "묶음": group_str,
+            "표본 수(n)": str(prop["n"]),
+            "상태": prop["status"],
+            "제안 값(초)": val_str,
+        })
+
+    note = f"티어·위험도 미상: {unknown_count}건 제외\n작업 전 배정 없음: {unassigned_count}건 제외\n\n"
+    return note + table(rows)
+
+
 def main() -> int:
     events = read_events()
     body = (
@@ -297,6 +609,8 @@ def main() -> int:
         "'사람 대기(자동)'은 lead 가 mark.py wait-start/wait-end 로 남긴 기록에서, "
         "'사람 시간(보조)'은 사람이 찍은 start/end 에서 계산한다.\n\n"
         "## 작업 지시서별\n\n" + table(per_wo(events)) +
+        "\n## 사용량 (역할 × 에이전트)\n\n" + table(usage_by_role_agent(events)) +
+        "\n## 기본값 보정 제안 (적용은 사용자 확인)\n\n" + proposal_section(events) +
         "\n## 테스트 승인 대기 (H3, 자동)\n\n" + table(approvals(events)) +
         "\n## 문제 기록 (spec_issues.md)\n\n" + table(issues())
     )

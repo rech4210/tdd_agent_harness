@@ -3,8 +3,8 @@
 사람의 기억이나 자기 보고가 아니라, 하네스 스크립트가 실행될 때 자동으로 남긴다.
 reports/events.jsonl 에 한 줄씩 추가만 한다 (수정 · 삭제하지 않는다).
 
-자동 기록: gate_run (run_gates.py), test_lock (check_protected_paths.py --write-lock)
-수동 보조: mark.py 로 남기는 사람 이벤트 (없어도 KPI 의 핵심 지표는 계산된다)
+자동 기록: gate_run · feedback_run (run_gates.py), test_lock (check_protected_paths.py --write-lock), model_usage (usage.py)
+수동 보조: mark.py 로 남기는 사람 이벤트 (human_*, review_run, budget_extend, budget_stop, wo_class) (없어도 KPI 의 핵심 지표는 계산된다)
 """
 
 from __future__ import annotations
