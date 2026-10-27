@@ -444,6 +444,11 @@ def generate_documents(
     return target_bytes_map, doc_section_hashes
 
 
+def _norm_eol(b: bytes) -> bytes:
+    """줄 끝 CRLF 쌍(\\r\\n)을 LF(\\n)로 정규화한다."""
+    return b.replace(b"\r\n", b"\n")
+
+
 def internal_check(root: Path, state: dict) -> list[str]:
     """state와 파일 시스템 및 승인 blob 간의 계약 및 일치성 검사."""
     errs: list[str] = []
@@ -541,7 +546,7 @@ def internal_check(root: Path, state: dict) -> list[str]:
             curr_b = target_file.read_bytes()
             inner = extract_managed_section(curr_b, ROLES_BEGIN, ROLES_END)
             expected_inner = mf.read_bytes().strip()
-            if inner != expected_inner:
+            if _norm_eol(inner) != _norm_eol(expected_inner):
                 errs.append(f"문서 '{mf.name}' 의 관리 구간 내용이 템플릿과 일치하지 않습니다 (drift)")
         except Exception as e:
             errs.append(f"문서 '{mf.name}' 관리 구간 검사 실패: {e}")
@@ -554,7 +559,7 @@ def internal_check(root: Path, state: dict) -> list[str]:
             curr_b = handoff_file.read_bytes()
             inner = extract_managed_section(curr_b, GUIDE_BEGIN, GUIDE_END)
             expected_guide = generate_handoff_role_guide_bytes(preset_name, state.get("lead", "")).strip()
-            if inner != expected_guide:
+            if _norm_eol(inner) != _norm_eol(expected_guide):
                 errs.append("HANDOFF 문서의 관리 구간 내용이 일치하지 않습니다 (drift)")
             # 상태줄 lead 충돌 검사
             check_handoff_state_line(handoff_file, state.get("lead", ""))
