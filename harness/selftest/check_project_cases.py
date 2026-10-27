@@ -18,6 +18,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 BEGIN, END = "<!-- harness:roles:begin -->", "<!-- harness:roles:end -->"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_fixture import copy_default_config, copy_harness_tree
+
+UPSTREAM_ONLY = {
+    "README.md": "# tdd-agent-harness (upstream README)\n\n하네스 저장소 README — 새 프로젝트에 가면 안 된다.\n",
+    "HARNESS_STATUS.md": "# harness status (upstream only)\n",
+    "HARNESS_QA.md": "# harness QA (upstream only)\n",
+    "dev/NOTE.md": "harness development history (upstream only)\n",
+}
 
 
 def sh(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -31,12 +40,12 @@ def git_identity(repo: Path) -> None:
 
 def make_upstream(base: Path) -> Path:
     up = base / "up"
-    files = sh(ROOT, "git", "ls-files", "-co", "--exclude-standard").stdout.split("\n")
-    for rel in filter(None, files):
-        src = ROOT / rel
-        if src.is_file() and "__pycache__" not in rel and rel != "harness/UPSTREAM":
-            (up / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, up / rel)
+    copy_harness_tree(up)
+    # 하네스 저장소에만 있는 것(개발 이력 · 하네스 README)을 고정 내용으로 심는다.
+    # 소비 저장소에서 돌려도 N01c · N01d 가 new_project 의 제외 규칙을 실제로 검사하게 한다.
+    for rel, text in UPSTREAM_ONLY.items():
+        (up / rel).parent.mkdir(parents=True, exist_ok=True)
+        (up / rel).write_text(text, encoding="utf-8")
     sh(up, "git", "init", "-q", "-b", "main")
     git_identity(up)
     sh(up, "git", "add", "-A")
@@ -209,7 +218,7 @@ def make_roles_repo(base: Path) -> Path:
     repo = base / "rolerepo"
     repo.mkdir(parents=True)
     shutil.copytree(ROOT / "harness", repo / "harness", ignore=shutil.ignore_patterns("__pycache__", "UPSTREAM"))
-    shutil.copytree(ROOT / "config", repo / "config")
+    copy_default_config(repo / "config")
     shutil.copytree(ROOT / "templates" / "roles", repo / "templates" / "roles")
     fixtures = {
         "bad-sep": 'about = "x"\n[agents.codex]\nfamily = "openai"\n[assign]\ntest_author = "codex"\nimplementer = "codex"\n',

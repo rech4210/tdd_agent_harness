@@ -16,6 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_fixture import copy_harness_tree
 
 
 def sh(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -24,12 +26,7 @@ def sh(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess
 
 def make_upstream(base: Path) -> Path:
     up = base / "up"
-    files = sh(ROOT, "git", "ls-files", "-co", "--exclude-standard").stdout.split()
-    for rel in files:
-        src = ROOT / rel
-        if src.is_file() and "__pycache__" not in rel:
-            (up / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, up / rel)
+    copy_harness_tree(up)
     for cmd in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email", "t@example.invalid"],
                 ["git", "config", "user.name", "t"], ["git", "add", "-A"], ["git", "commit", "-qm", "upstream"]):
         sh(up, *cmd)

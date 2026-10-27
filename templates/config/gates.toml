@@ -1,0 +1,126 @@
+# 품질 게이트 정의 (프로젝트 소유). 이 파일은 사람만 고친다 (H10: 감시자를 누가 감시하나).
+# 순서가 의미를 가진다: 싸고 빠른 검사 → 비싸고 느린 검사. 앞이 실패하면 뒤는 의미가 없다.
+#
+# 처음 한 번: python harness/init.py --package <이름>   (아래 <package> 를 바꾸고 프로젝트 골격을 만든다)
+# 경로 · 임계값 · 도구 옵션은 프로젝트의 값이다. 바꾸면 결정 기록(D-xx)에 근거를 남긴다.
+# 실행: python harness/run_gates.py --role implementer --base <기준 커밋> [--wo <작업 지시서>] [--slice <슬라이스>]
+
+[harness]
+adapter = "python"        # adapters/<이름>/adapter.py. Core 는 언어를 모르고, 도구 실행과 결과 해석은 어댑터가 한다
+locked = ["tests/**", "specs/**"]   # H3 에서 사람이 승인 · 잠그는 경로: 테스트와 명세 (dev/DECISIONS.md HD-02). 소스 옆에 테스트를 두는 언어는 glob 으로
+feedback_gates = ["G2", "G7"]   # 판정 전 피드백으로 구현자에게 돌려줄 게이트, 커버리지는 넣지 않는다 (HD-24)
+# 병합 강제 (HD-28 0a): 이 ref 로 가는 push 전에 게이트를 다시 돌린다 (python harness/prepush.py --install). 서버 쪽 강제는 CI 필수 체크 (docs/enforcement.md)
+# [enforcement] 는 [harness] 아래가 아니라 별도 표로 둔다:
+# [enforcement]
+# protected_refs = ["refs/heads/main"]
+# role = "implementer"
+# base_tag = "{compact}-base"   # KPI 의 지시 시각 = 이 태그의 커밋 시각. {compact} = 작업 지시서 ID 에서 '-' 를 뺀 것
+
+# 모든 게이트 하위 프로세스에 강제로 넘기는 환경변수.
+# TZ: 비교 기준(UTC)과도 서비스 시간대와도 달라야 한다. 개발 기계의 현지 시간대에 기대는 버그가 숨지 않게 한다
+[env]
+TZ = "XXX-05:30"
+
+[[gate]]
+id = "GA"
+name = "역할 배정 제약"
+why = "테스트 작성자와 구현자 등이 같은 모델 계열이면 같은 맹점을 공유한다. 배정이 틀리면 뒤의 판정이 독립적이지 않다"
+cmd = ["python", "harness/check_assignments.py"]
+
+[[gate]]
+id = "G0"
+name = "보호 경로 · 우회 패턴 · 테스트 잠금"
+why = "구현자가 테스트나 게이트를 고쳐 통과하는 경로를 먼저 막는다. 이게 뚫리면 뒤의 모든 게이트가 무의미하다"
+cmd = ["python", "harness/check_protected_paths.py", "--base", "{base}", "--role", "{role}"]
+
+[[gate]]
+id = "GT"
+name = "요구 추적성 (SDD)"
+why = "명세의 요구마다 지키는 테스트가 있고, 테스트가 인용한 ID 가 명세 · 결정에 있으며, 명세의 추측(가정 · 명확화 · NEEDS CLARIFICATION)이 사람 결정 없이 테스트로 내려가지 않았는지"
+kind = "traceability"
+requirements = ["specs/*/spec.md"]          # Spec Kit 배치. FR-### · INV-# 를 정의하는 파일 (HTML 주석 안은 무시)
+decisions = ["reports/decisions.md"]        # D-## 를 정의하는 파일 (templates/decision-record.md)
+modules = ["tests/**/test_*.py"]            # 머리말(guards · technique · checklist)이 있어야 하는 테스트 모듈
+defaults = ["docs/DEFAULTS.md"]     # DEF-## 를 정의하는 파일 (경계 표 승격 근거, 공통 기본값)
+# product_invariants = ["docs/PRODUCT.md"]  # INV-G# (제품 불변식)를 정의하는 파일. 설정하면 경계 표 승격 근거로 인용 가능, D-## 와 쉼표로 섞기 가능 (HD-27)
+# 검사: header · id_format · undecided · forward · backward · assumptions · clarifications · needs_clarification (docs/sdd-integration.md)
+# 아직 테스트로 지키지 않는 요구: 이유와 사람 구간을 적는다. 슬라이스에서는 보고서에 남고, 전체 게이트(릴리스)에서는 실패한다 (HD-07)
+# deferred = { "FR-007" = "H2: 정밀도 미결정, 다음 슬라이스" }
+# 슬라이스는 override 로 범위를 고른다: in_scope = ["FR-001", "FR-002"]
+
+[[gate]]
+id = "GC"
+name = "헌법 = 설정"
+why = "에이전트가 읽는 헌법(.specify/memory/constitution.md)이 판정 설정(config/*.toml)과 다르면, 에이전트는 자기를 판정하는 규칙을 모른 채 일한다 (HD-04)"
+cmd = ["python", "harness/constitution.py", "--check"]
+
+[[gate]]
+id = "G1"
+name = "아키텍처 적합성"
+why = "의존성 규칙이 깨지면 Fake 기반 테스트의 전제(유스케이스가 포트만 안다)가 무너진다. 규칙은 config/architecture.toml"
+kind = "architecture"
+src = "src"
+
+[[gate]]
+id = "G2"
+name = "단위 · 성질 · 유스케이스 · 계약(Fake)"
+why = "불변식의 대부분을 밀리초 단위로 검사한다"
+cmd = [
+  "python", "-m", "pytest", "-q", "-m", "not integration", "tests/unit",
+  "--cov=<package>", "--cov-branch", "--cov-report=json:reports/coverage.json",
+  "--hypothesis-seed=0", "--junit-xml=reports/junit.xml",
+]
+# 종료 코드만 믿지 않는다. JUnit XML 로 테스트 수 · 실패 · 건너뜀을 확인한다 (0개 · 건너뜀 = 실패)
+test_report = "reports/junit.xml"
+# allow_skipped = 0
+# min_tests = 1
+
+[[gate]]
+id = "G3"
+name = "레이어별 분기 · 함수 커버리지"
+why = "커버리지는 '실행되지 않은 코드'를 찾는 용도로만 쓴다. 높다고 옳다는 뜻은 아니다. 분기가 다 덮인 파일 안에 한 번도 실행되지 않은 함수가 숨을 수 있어 함수 커버리지도 본다"
+kind = "coverage"
+report = "reports/coverage.json"
+[gate.min_branch_percent]
+"src/<package>" = 100
+# 함수 커버리지 (선택). 접두마다 함수 측정이 없으면 실패한다 — 함수가 없는 범위는 넣지 않는다
+[gate.min_function_percent]
+"src/<package>" = 100
+
+# G4 인수 테스트 · G5 통합(실제 DB · 동시성)은 해당 테스트가 생기면 연다. 예:
+# [[gate]]
+# id = "G4"
+# name = "인수 테스트 (Gherkin)"
+# why = "사람이 승인한 시나리오가 그대로 동작하는지. 단위 테스트가 놓친 조립 오류를 잡는다"
+# cmd = ["python", "-m", "pytest", "-q", "tests/acceptance", "--junit-xml=reports/junit_acceptance.xml"]
+# test_report = "reports/junit_acceptance.xml"
+#
+# [[gate]]
+# id = "G5"
+# name = "통합: 실제 DB 계약 · 동시성"
+# why = "Fake 와 실제가 같은지(계약), 동시성 불변식이 저장소 수준에서 지켜지는지"
+# cmd = ["python", "-m", "pytest", "-q", "-m", "integration", "tests/contract", "tests/concurrency"]
+# needs_env = ["DATABASE_URL"]
+
+[[gate]]
+id = "G6"
+name = "돌연변이 점수"
+why = "테스트가 실제로 결함을 잡는지 확인한다. 커버리지보다 결함 검출력과의 상관이 높다"
+kind = "mutation"
+run = ["mutmut", "run"]
+stats = ["mutmut", "export-cicd-stats"]
+stats_file = "mutants/mutmut-cicd-stats.json"
+min_score = 0.85
+# 사람이 결정한 등가 변이 규칙. 해당 생존 변이는 점수 분모에서 빼고 보고서에 따로 적는다.
+# 어댑터가 제공하는 규칙 이름만 쓸 수 있다. Python 어댑터: "raise-message" (예외 메시지는 계약이 아니다)
+equivalent_rules = []
+
+[[gate]]
+id = "G7"
+name = "정적 품질: 복잡도 · 타입 · 보안 스캔"
+why = "에이전트 코드는 '동작하지만 읽기 어려운' 쪽으로 자란다. 복잡도 상한이 다음 에이전트의 작업 비용을 지킨다"
+cmds = [
+  ["xenon", "--max-absolute", "B", "--max-modules", "A", "--max-average", "A", "src/<package>"],
+  ["mypy", "--strict", "src/<package>"],
+  ["bandit", "-q", "-r", "src/<package>"],
+]

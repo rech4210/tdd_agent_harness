@@ -1,0 +1,17 @@
+# 에이전트 → 모델 계열 (프로젝트 소유, 사람만 고친다: H10). 분리 제약(roles.toml [separation])은 '계열'로 판단한다.
+# 계열 = 학습 출처가 같아 같은 맹점을 공유할 가능성이 큰 묶음.
+# 새 에이전트를 쓰려면 여기 먼저 등록한다. 이름은 assignments.toml 과 작업 지시서 머리말의 agent 와 같아야 한다.
+# 사람이 직접 역할을 맡으면 family = "human" 으로 등록한다.
+#
+# 예:
+# [agents.claude]
+# family = "anthropic"
+#
+# [agents.codex]
+# family = "openai"
+#
+# [agents.gemini]
+# family = "google"
+
+[agents.human]
+family = "human"

@@ -1,0 +1,31 @@
+# Workspace content policy approved by user.
+# Lead-owned read policy; committed/frozen inputs required before delivery.
+# Does not grant write/command permissions or change permanent role presets.
+schema = 1
+
+# Consumer-project example: application inputs + current public Red/WO, no Core.
+# Project owners must replace project-specific paths before using this elsewhere.
+[profiles.consumer]
+include = [
+  "src/**", "tests/**", "work_orders/**",
+  "harness/selftest/check_workspace_cases.py",
+]
+exclude = [
+  "tests/heldout/**", "dev/redteam/**", "dev/review/**", "reports/**",
+  ".jobs/**", "config/test_lock.json",
+]
+required = ["harness/selftest/check_workspace_cases.py"]
+
+# Harness development requires selected Core references; withheld histories stay out.
+# workspace.py may not exist in the initial base; implementation creates it.
+[profiles.harness_dev]
+include = [
+  "harness/workspace.py", "harness/paths.py", "harness/new_project.py",
+  "harness/upgrade.py", "harness/selftest/check_workspace_cases.py",
+  "docs/isolated-delegation.md", "HARNESS_STATUS.md",
+]
+exclude = [
+  "dev/redteam/**", "dev/review/**", "reports/**", ".jobs/**",
+  "config/test_lock.json",
+]
+required = ["harness/selftest/check_workspace_cases.py", "docs/isolated-delegation.md"]

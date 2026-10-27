@@ -1,0 +1,48 @@
+# 아키텍처 규칙 (프로젝트 소유, 사람만 고친다: H10). 게이트 G1 (kind = "architecture").
+# Core(harness/arch.py)가 어댑터의 정규화 import 그래프에 이 규칙을 적용한다. 모든 규칙은 검사 대상이 0개이면 실패한다.
+#
+# 기본값은 의존성 규칙(안쪽 레이어는 바깥을 모른다)의 출발점이다. 레이어 이름 · 허용 목록은 프로젝트에 맞게 바꾼다.
+#   domain    : 순수 로직 (값 객체 · 엔티티 · 정책). 시각 · 난수 · 환경 · 입출력에 직접 닿지 않는다
+#   usecases  : domain 과 ports 만 안다
+#   adapters  : 바깥 세계 (DB · HTTP · 시계 · 난수). usecases 가 정한 ports 를 구현한다
+#   main      : 조립
+
+[architecture]
+package = "<package>"
+inner = ["domain", "__init__.py"]                       # 시각 · 난수 · 환경 직접 접근 · 동적 접근 금지
+required_top_level = ["domain"]                          # 전체 게이트에서 있어야 하는 최상위 폴더 (레이어가 생기면 늘린다)
+checks = ["source_tree", "layers", "never_import", "inner", "test_frameworks", "top_level"]
+# 테스트 도구는 소스에서 import 하지 않는다 (어댑터 언어의 최상위 모듈 이름)
+test_frameworks = ["pytest", "_pytest", "hypothesis", "unittest", "coverage", "mutmut", "pytest_bdd"]
+# 이름의 마지막 두 마디로 금지하는 호출. 항목은 한 마디(예: ["open"])일 수 있으며, 전체 이름이 정확히 그 단어일 때만 매칭된다.
+# Python 어댑터에서는 최상위 builtins.<name>(import builtins as b 또는 from builtins import open as o 포함) 사용도 <name>으로 취급되어 한 마디 항목에 차단된다.
+# p.open이나 os.open 같은 다른 객체의 메서드는 매칭되지 않는다.
+forbidden_calls = [
+  ["datetime", "now"], ["datetime", "utcnow"], ["datetime", "today"],
+  ["date", "today"], ["time", "time"], ["time", "monotonic"],
+  ["uuid", "uuid4"], ["uuid", "uuid1"],
+  ["random", "random"], ["random", "randint"], ["random", "choice"],
+  ["os", "getenv"], ["os", "environ"],
+]
+# 상수 이름 접근(예: getattr(x, "now"))으로 금지하는 이름
+forbidden_names = [
+  "now", "utcnow", "today", "time", "monotonic", "uuid4", "uuid1", "random", "randint", "choice", "getenv", "environ",
+  "datetime", "uuid", "os",
+]
+
+[architecture.groups]
+pure = ["__future__", "dataclasses", "datetime", "enum", "typing", "math", "functools", "itertools", "collections", "decimal", "abc"]
+
+# 레이어 경로 = 패키지 아래 상대 경로 (폴더 또는 파일). 값 = 허용 import 접두사 ("@그룹" 은 groups 를 펼친다)
+[architecture.layers]
+"__init__.py" = ["@pure"]
+"domain" = ["@pure", "<package>.domain"]
+# "usecases" = ["@pure", "logging", "<package>.domain", "<package>.usecases"]
+
+[[architecture.never_import]]
+from = "domain"
+prefixes = ["<package>.usecases", "<package>.adapters", "<package>.main"]
+
+# [[architecture.never_import]]
+# from = "adapters"
+# prefixes = ["<package>.main"]

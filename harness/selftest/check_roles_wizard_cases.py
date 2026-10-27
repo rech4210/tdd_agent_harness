@@ -23,13 +23,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 BEGIN = "<!-- harness:roles:begin -->"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_fixture import copy_default_config
 
 
 def make_repo(base: Path, name: str) -> Path:
     repo = base / name
     repo.mkdir(parents=True)
     shutil.copytree(ROOT / "harness", repo / "harness", ignore=shutil.ignore_patterns("__pycache__", "UPSTREAM"))
-    shutil.copytree(ROOT / "config", repo / "config")
+    copy_default_config(repo / "config")
     shutil.copytree(ROOT / "templates" / "roles", repo / "templates" / "roles")
     return repo
 

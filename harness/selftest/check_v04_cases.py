@@ -31,6 +31,7 @@ sys.path.insert(0, str(HERE.parent))
 import check_g0_spec_cases as g0c  # noqa: E402
 from check_kpi_cases import PY, ev, events, kpi_rows, make_project, write_events  # noqa: E402
 from traceability import check_traceability  # noqa: E402
+from harness_fixture import DEFAULT_CONFIG
 
 ROOT = HERE.parents[1]
 FEEDBACK_ONLY_G2 = (
@@ -119,7 +120,7 @@ def b_cases(results: list[tuple[str, bool, str]]) -> None:
 # ---------- R: 역할 틀 ----------
 
 def r_cases(results: list[tuple[str, bool, str]]) -> None:
-    roles = tomllib.loads((ROOT / "config" / "roles.toml").read_text(encoding="utf-8"))
+    roles = tomllib.loads((DEFAULT_CONFIG / "roles.toml").read_text(encoding="utf-8"))
     r = roles["roles"]
     readonly = [name for name in ("adversary", "mutation_auditor", "reviewer") if name in r]
     missing = [name for name in readonly if r[name].get("lock_exempt") is not True]
@@ -131,7 +132,7 @@ def r_cases(results: list[tuple[str, bool, str]]) -> None:
 
     repo = g0c.make_repo()
     try:
-        (repo / "config" / "roles.toml").write_bytes((ROOT / "config" / "roles.toml").read_bytes())
+        (repo / "config" / "roles.toml").write_bytes((DEFAULT_CONFIG / "roles.toml").read_bytes())
         g0c.write_lock(repo)
         g0c.git(repo, "add", "-A")
         g0c.git(repo, "commit", "-qm", "lock with template roles")
@@ -232,7 +233,7 @@ def kf_cases(results: list[tuple[str, bool, str]]) -> None:
                         row.get("구현 실행 수") == "1" and row.get("max_rounds 산정 회차") == "1"
                         and row.get("판정 전 피드백 실행 수") == "2", str({k: row.get(k) for k in ("구현 실행 수", "max_rounds 산정 회차", "판정 전 피드백 실행 수")})))
 
-        gates_doc = tomllib.loads((ROOT / "config" / "gates.toml").read_text(encoding="utf-8"))
+        gates_doc = tomllib.loads((DEFAULT_CONFIG / "gates.toml").read_text(encoding="utf-8"))
         fbg = gates_doc.get("harness", {}).get("feedback_gates")
         kinds_by_id = {g["id"]: g.get("kind", "") for g in gates_doc.get("gate", [])}
         results.append(("F08 설정 틀: feedback_gates 에 G2 가 있고, 모든 ID 가 게이트에 있으며, 커버리지 종류가 없다",

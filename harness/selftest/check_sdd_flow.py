@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 ONLY = "GA,G0,GT,GC,G1,G2,G3"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_fixture import copy_harness_tree
 
 SPEC = """# Feature Specification: 금액
 
@@ -138,13 +140,7 @@ class Flow:
         self.results.append((name, bad_gates == fail, f"FAIL={sorted(bad_gates)} 기대={sorted(fail)}"))
 
     def setup(self) -> None:
-        files = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=ROOT, capture_output=True,
-                               text=True, check=True).stdout.split()
-        for rel in files:
-            src = ROOT / rel
-            if src.is_file() and "__pycache__" not in rel:
-                (self.dir / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, self.dir / rel)
+        copy_harness_tree(self.dir)
         self.sh("git", "init", "-q")
         self.sh("git", "config", "user.email", "selftest@example.invalid")
         self.sh("git", "config", "user.name", "selftest")
