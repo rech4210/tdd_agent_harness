@@ -84,7 +84,7 @@ def kpi_section(proj: Path, title: str) -> tuple[list[dict[str, str]], str]:
 def usage(run_id: str, wo: str = "WO-X1", **f: object) -> dict:
     e = {"kind": "model_usage", "wo": wo, "task": "T1", "role": "implementer", "agent": "a1", "model": "m1",
          "run_id": run_id, "round": 1, "started": "2026-10-18T10:00:00Z", "seconds": 300.0,
-         "time_scope": "model_activity", "cap": None, "stop": None, "tier": None, "risk": None,
+         "time_scope": "model_activity", "time_source": "measured_activity_intervals", "cap": None, "stop": None, "tier": None, "risk": None,
          "condition": {"exec_path": "p1", "permission": "edit"}, "source": "fixture"}
     e.update(f)
     return e

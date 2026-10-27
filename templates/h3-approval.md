@@ -24,7 +24,7 @@
 - 대상: `<테스트 파일 경로>` (기존 <N>건 → 보강 후 <M>건)
 - 작성 · 보강: <테스트 작성자 역할> · 승인: 사람
 - 적용: <결정 ID 목록>, 체크리스트 기본 질문 + <C-A 항목 목록> (`templates/checklist.md`)
-- **사람 시간 기록:** 읽기 시작할 때 `python harness/mark.py start H3 --wo <슬라이스 ID>`, 잠금 직후 `python harness/mark.py end H3 --wo <슬라이스 ID>`
+- **대기 기록 (lead):** 자료를 내기 직전 `python harness/mark.py wait-start H3 --wo <슬라이스 ID>`, 답을 받은 직후 `wait-end H3 --wo <슬라이스 ID> --decisions <N>`. 사람의 순수 판단 시간은 선택으로 `start/end H3`.
 - 결론 먼저: **<승인을 권한다 / 보류를 권한다>. <선행 조건. 예: 열린 질문 Q1 ~ Qn을 D-xx로 먼저 정해야 한다>**
 
 ## 1. 무엇을 보강했나
@@ -79,12 +79,12 @@
 
 ## 6. 승인 절차
 
-1. `python harness/mark.py start H3 --wo <슬라이스 ID>`
+1. (lead) 이 자료를 내기 직전 `wait-start H3`
 2. Q1 ~ Qn에 답한다 → 결정 기록에 D-xx로 남긴다
 3. 체크리스트 기본 질문과 위 C-A 항목을 확인한다
 4. 바뀐 테스트와 명세 확인: `git show <이 자료 커밋> -- <테스트 파일 경로> <명세 파일 경로>`
-5. 잠금: `python harness/check_protected_paths.py --write-lock` (**테스트와 명세가 바뀌었을 때**: `locked = ["tests/**", "specs/**"]`)
-6. `python harness/mark.py end H3 --wo <슬라이스 ID>`
+5. (lead) 사람의 승인 답을 받은 직후 `wait-end H3 --decisions <N>`
+6. (lead) 잠금: `python harness/check_protected_paths.py --write-lock` (**테스트와 명세가 바뀌었을 때**: `locked = ["tests/**", "specs/**"]`)
 7. 지시서를 확정해 커밋하고 기준 태그: `git tag -a <슬라이스 ID>-base -m "<테스트 · 명세 잠금 + 지시서 확정>"` ("잠금 + 지시서 확정 커밋 = 기준 태그 `<슬라이스 ID>-base`")
 
 ## 7. 재승인 기록 (테스트를 다시 고쳤을 때)

@@ -11,6 +11,9 @@
   점검 2 Codex: 어느 표(프로필 포함)든 sandbox_mode = "danger-full-access" → FAIL, approval_policy = "never" → WARN,
     최상위 sandbox_mode · approval_policy 가 없으면 WARN.
   점검 3 AGY: permissionGrants.permissionGrants.deny 에 "command(*)" 가 없으면 FAIL (편집 전용, HD-09).
+  점검 3b AGY 다른 프로젝트 (WO-H37): --agy-project 파일과 같은 폴더의 다른 *.json 을 모두 본다. 행 하나
+    “AGY 다른 프로젝트”: 모두 command(*) 차단이면 PASS, 차단 없는 · 못 읽는 파일이 있으면 그 파일 이름(확장자 뺀 것)을
+    적고 WARN(종료에 영향 없음). 다른 *.json 이 없으면 이 행은 없다.
   파일이 없거나 읽지 못하면 그 항목은 WARN (확인 불가). 설정 파일을 바꾸지 않는다.
   출력: 결과 표(| 항목 | 결과 | 내용 |) + “판정:” 줄. 종료: FAIL 이 있으면 1, 아니면 0.
 
@@ -188,6 +191,40 @@ def main() -> int:
         case("P12 기본 경로는 홈 · APPDATA 기준 (인자 없이 위 파일을 찾는다)",
              has and r.returncode == 1 and any("claude" in l for l in rows_with(r.stdout, "FAIL"))
              and len(rows_with(r.stdout, "PASS")) >= 2, (r.stdout + r.stderr)[-200:] if r else "")
+
+        # ── WO-H37: 기본 외 AGY 프로젝트 ──
+        def other_rows(out: str) -> list[str]:
+            return [l for l in out.splitlines() if l.startswith("| AGY 다른 프로젝트")]
+        args = fixture(base, "p14")
+        d = base / "p14"
+        make_agy(d / "proj-ok.json", CLEAN_DENY)
+        make_agy(d / "proj-open.json", ["mcp(*)"])
+        r = run(args) if has else None
+        o = other_rows(r.stdout) if r else []
+        case("P14 다른 프로젝트 중 command(*) 없는 것 → WARN 한 행(이름 표시, 차단된 것은 안 적음), 종료 0, 기본은 PASS",
+             has and r.returncode == 0 and len(o) == 1 and "| WARN |" in o[0] and "proj-open" in o[0]
+             and "proj-ok" not in o[0] and any(l.startswith("| AGY deny |") and "| PASS |" in l for l in r.stdout.splitlines()),
+             (r.stdout + r.stderr)[-220:] if r else "")
+        args = fixture(base, "p15a")
+        make_agy(base / "p15a" / "proj-ok.json", CLEAN_DENY)
+        ra = run(args) if has else None
+        rb = run(fixture(base, "p15b")) if has else None
+        oa, ob = (other_rows(ra.stdout), other_rows(rb.stdout)) if has else ([], [])
+        case("P15 모두 차단 → PASS 한 행 · 다른 *.json 없음 → 행 없음",
+             has and len(oa) == 1 and "| PASS |" in oa[0] and ob == [], f"{oa} {ob}")
+        args = fixture(base, "p16")
+        (base / "p16" / "proj-bad.json").write_text("{not json", encoding="utf-8")
+        r = run(args) if has else None
+        o = other_rows(r.stdout) if r else []
+        case("P16 다른 프로젝트를 못 읽음 → WARN(이름 표시), 종료 0, Traceback 없음",
+             has and r.returncode == 0 and len(o) == 1 and "| WARN |" in o[0] and "proj-bad" in o[0]
+             and "Traceback" not in r.stderr, (r.stdout + r.stderr)[-220:] if r else "")
+        args = fixture(base, "p17", deny=["mcp(*)"])
+        make_agy(base / "p17" / "proj-ok.json", CLEAN_DENY)
+        r = run(args) if has else None
+        case("P17 기본 프로젝트 차단 없음은 여전히 FAIL, 종료 1 (다른 프로젝트가 차단돼 있어도)",
+             has and r.returncode == 1 and any(l.startswith("| AGY deny |") and "| FAIL |" in l for l in r.stdout.splitlines()),
+             (r.stdout + r.stderr)[-200:] if r else "")
 
         case("P13 도구는 Core 밖 (harness/ 에 사전 점검 모듈이 없다)",
              has and not list((ROOT / "harness").glob("preflight*.py")))

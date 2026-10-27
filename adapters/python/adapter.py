@@ -338,3 +338,43 @@ def scaffold(root: Path, package: str) -> list[str]:
         ignore.write_text("\n".join(have + add) + "\n", encoding="utf-8", newline="\n")
         made.append(".gitignore")
     return made
+
+
+def mutation_config_draft(files: list[str], tests: list[str]) -> dict:
+    """새 슬라이스 초안의 변이 도구 설정 (new_slice.py, WO-H46)."""
+    return {
+        "source_paths": list(files),
+        "pytest_add_cli_args_test_selection": list(tests),
+    }
+
+
+def slice_override_draft(files: list[str], tests: list[str]) -> dict:
+    """새 슬라이스 초안의 게이트 덮어쓰기 설정 (new_slice.py, WO-H53)."""
+    package = ""
+    if files:
+        parts = files[0].replace("\\", "/").split("/")
+        if parts[0] == "src" and len(parts) > 1:
+            package = parts[1]
+        else:
+            package = parts[0]
+    return {
+        "G2": {
+            "cmd": [
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                *tests,
+                f"--cov={package}",
+                "--cov-branch",
+                "--cov-report=json:reports/coverage.json",
+                "--hypothesis-seed=0",
+                "--junit-xml=reports/junit.xml",
+            ],
+        },
+        "G3": {
+            "min_branch_percent": {f: 100 for f in files},
+            "min_function_percent": {f: 100 for f in files},
+        },
+    }
+

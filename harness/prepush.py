@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tomllib
@@ -77,6 +78,37 @@ def install_hook() -> int:
     return 0
 
 
+def _reusable(report: object, local_sha: str, base_sha: str, role: str) -> bool:
+    """reports/gate_report.json 이 대상 push 의 유효한 통과 증거인지 엄격하게 검증한다."""
+    if not isinstance(report, dict):
+        return False
+    if report.get("passed") is not True:
+        return False
+    rep_role = report.get("role")
+    if not isinstance(rep_role, str) or rep_role != role:  # 정확히 같아야 한다 (공백 정규화 없음, WO-H77 리드 보정 B04)
+        return False
+    ev = report.get("evidence")
+    if not isinstance(ev, dict):
+        return False
+    schema = ev.get("schema")
+    if type(schema) is not int or schema != 1:
+        return False
+    if ev.get("target_sha") != local_sha:
+        return False
+    if ev.get("base_sha") != base_sha:
+        return False
+    if ev.get("scope") != "full":
+        return False
+    if ev.get("dirty") is not False:
+        return False
+    exit_code = ev.get("exit_code")
+    if type(exit_code) is not int or exit_code != 0:
+        return False
+    if ev.get("verdict") != "ALL PASS":
+        return False
+    return True
+
+
 def run_hook() -> int:
     """git pre-push 훅 규약에 따라 표준 입력을 검증하고 필요시 게이트를 실행한다."""
     gates_path = ROOT / "config" / "gates.toml"
@@ -120,6 +152,11 @@ def run_hook() -> int:
         print("[enforcement] 에 role 설정이 없습니다 (기본 역할 없음).", file=sys.stderr)
         return 1
     role = role.strip()
+
+    reuse = enforce.get("reuse_evidence", False)
+    if type(reuse) is not bool:
+        print("[enforcement] reuse_evidence 는 true/false 여야 합니다.", file=sys.stderr)
+        return 1
 
     # 1. 거부 사유 검사: 하나라도 있으면 게이트를 돌리지 않는다
     # (1) 삭제 검사: local_sha 가 zero object ID
@@ -167,9 +204,22 @@ def run_hook() -> int:
                 print(f"원격 커밋 {remote_sha} 이 로컬에 없습니다 (먼저 fetch).")
                 return 1
 
-    # 2. 모든 검사를 통과한 경우 게이트 실행
+    # 2. 모든 검사를 통과한 경우 게이트 실행 또는 증거 재사용
+    initial_report: object = None
+    if reuse:
+        report_path = ROOT / "reports" / "gate_report.json"
+        try:
+            if report_path.is_file():
+                # BOM 은 evidence.py check 와 같게 거부한다 (utf-8 엄격 디코드 → BOM 이면 파싱 실패, 리드 보정 B09)
+                initial_report = json.loads(report_path.read_bytes().decode("utf-8"))
+        except Exception:
+            initial_report = None
+
     for local_ref, local_sha, remote_ref, remote_sha in protected_lines:
         base_sha = local_sha if _is_zero_sha(remote_sha) else remote_sha
+        if reuse and _reusable(initial_report, local_sha, base_sha, role):
+            print(f"재사용: 대상 {local_sha} · 기준 {base_sha} (reports/gate_report.json)")
+            continue
         cmd = [sys.executable, str(ROOT / "harness" / "run_gates.py"), "--role", role, "--base", base_sha]
         run_res = subprocess.run(cmd, cwd=ROOT)
         if run_res.returncode != 0:

@@ -53,6 +53,20 @@ allow = ["reports/**"]
 deny  = ["src/**", "tests/**", "specs/**", ".specify/**", "harness/**", "adapters/**", "templates/**", "config/**"]
 lock_exempt = true   # 잠금 전에 일하는 읽기 전용 역할, 자기 변경은 권한 검사가 막는다 (HD-20)
 
+# 문서 최신화 (HD-52): 점검은 읽기 전용(결과는 실행 도구의 출력 파일, adapters/tools/codex_audit.py),
+# 편집은 프로젝트의 인계 문서와 보고서만. 하네스 소유 docs 와 사람이 승인한 문서(PRODUCT · DEFAULTS)는 고치지 않는다.
+# docs/HANDOFF.md 의 `상태:` 줄은 lead 만 바꾼다 (adapters/tools/check_handoff_state.py 가 검사).
+[roles.doc_auditor]
+allow = []
+deny  = ["**"]
+lock_exempt = true   # 잠금과 무관한 읽기 전용 역할. 어떤 변경이든 권한 검사가 막는다
+
+[roles.doc_editor]
+allow = ["docs/HANDOFF.md", "reports/**"]
+deny  = ["src/**", "tests/**", "specs/**", ".specify/**", "harness/**", "adapters/**", "templates/**", "config/**",
+         "pyproject.toml", ".github/**", "docs/PRODUCT.md", "docs/DEFAULTS.md"]
+lock_exempt = true   # 테스트를 고치지 못하므로(deny tests/**) 잠금 검사 대신 권한 검사가 지킨다
+
 # 분리 제약. 같은 슬라이스 안에서 아래 두 역할은 **다른 모델 계열**이어야 한다.
 # 어떤 에이전트가 어떤 역할을 맡는지는 여기 적지 않는다. 배정은 config/assignments.toml, 계열은 config/agents.toml.
 # 검사: harness/check_assignments.py (게이트 GA)
@@ -64,4 +78,5 @@ pairs = [
   ["implementer", "adversary"],          # 품질 검토자가 구현을 검토한다
   ["test_author", "mutation_auditor"],   # 자기 테스트의 약점을 '등가 변이'로 변명할 수 있다
   ["test_author", "adversary"],          # 레드팀이 테스트 작성자와 같은 맹점을 공유하면 그 맹점을 공격하지 못한다
+  ["doc_auditor", "doc_editor"],         # 편집자가 만든 왜곡을 같은 맹점의 점검자가 놓치지 않게 (HD-52)
 ]

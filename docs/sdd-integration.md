@@ -20,13 +20,15 @@ flowchart TD
     B --> C["3. H1 · H2 결정 승격<br/>reports/decisions.md (D-##)"]
     C --> D["4. 테스트 설계<br/>templates/test-design/"]
     D --> E["5. 테스트 작성<br/>(test_author: guards 인용)"]
-    E --> F["6. GT 자체 통과 확인<br/>harness/traceability.py"]
+    E --> F["6. GT 자체 점검<br/>run_gates.py --only GT"]
     F --> G["7. H3 승인<br/>게으른 구현 검증"]
     G --> H["8. 잠금<br/>tests/** + specs/**"]
     H --> I["9. 격리 구현<br/>(implementer)"]
     I --> J["10. 게이트 판정<br/>run_gates.py"]
     J --> K["11. 종료"]
 ```
+
+`--only` 실행은 자체 점검(`purpose = self_check`)이라 KPI 의 판정 · 원인 회차에 들어가지 않는다. 판정 원인을 잘못 기록했으면 `mark.py amend-cause` 로 정정을 덧붙인다(원래 기록은 그대로).
 
 | 단계 | 주체 | 행동 | 핵심 산출물 및 규칙 |
 |:---|:---|:---|:---|
@@ -37,10 +39,10 @@ flowchart TD
 | 5. 테스트 작성 | `test_author` | 테스트 모듈 작성 | 모듈 머리말 `guards` 에 `FR-###`, `INV-#`, `D-##` 인용 |
 | 6. GT 검사 | `test_author` | 추적성 게이트 확인 | GT 통과 확인 (명세 요구 ↔ 테스트 양방향 일치) |
 | 7. H3 승인 | 사람 | 테스트 승인 | `templates/h3-approval.md`, 가장 게으른 구현 차단 확인 |
-| 8. 잠금 | 사람 | 파일 잠금 | `tests/**` 및 `specs/**` 잠금 해시 갱신, 기준 태그 생성 |
+| 8. 잠금 | 사람 H3 승인 → lead | 파일 잠금 · 기준 태그 | 사람 H3 승인 직후 · 위임 전에 lead 가 `check_protected_paths.py --write-lock` (테스트와 명세가 바뀌었을 때만). 지시서 확정 · 커밋 · 기준 태그 `<slice>-base`(기존 태그 이동 · 삭제 금지, [슬라이스 생명주기](slice-lifecycle.md) 참고) |
 | 9. 격리 구현 | `implementer` | 제품 코드 작성 | 격리된 환경에서 `src/**` 만 수정 |
 | 10. 게이트 판정 | 하네스 (lead) | 전체/슬라이스 게이트 | `python harness/run_gates.py` 로 기계적 판정 |
-| 11. 종료 | 사람 | 슬라이스 종료 | 변이 분류(H9) 및 종료 태그 생성 |
+| 11. 종료 | lead (H9 대상 시 사람) | 슬라이스 종료 | 종료 기록 작성 · 커밋 · 종료 태그 `<slice>-closed`는 H9 대상이 없으면 lead, 있으면 사람 H9 뒤. 병합 · push 는 사람 ([슬라이스 생명주기](slice-lifecycle.md) 참고) |
 
 ---
 

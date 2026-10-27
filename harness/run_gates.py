@@ -15,6 +15,7 @@ Core 는 정규화된 결과에 판정 규칙(임계값, 분기 없는 파일 �
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -24,6 +25,8 @@ import time
 import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+sys.dont_write_bytecode = True
 
 from adapter_loader import load_adapter
 from events import log_event, now_utc
@@ -40,6 +43,7 @@ ADAPTER = load_adapter()
 # gates.toml [env]: 모든 게이트 하위 프로세스에 강제로 넘기는 환경변수.
 # 예: TZ 를 서비스 시간대와 다르게 고정해, 실행 기계의 현지 시간대에 기대는 코드를 드러낸다
 GATE_ENV: dict[str, str] = {}
+LAST_MUTATION: dict | None = None
 
 
 def _is_protected_report(path_str: str) -> bool:
@@ -53,13 +57,13 @@ def _is_protected_report(path_str: str) -> bool:
 
 
 def proc_env() -> dict[str, str]:
-    return {**os.environ, **GATE_ENV}
+    return {**os.environ, **GATE_ENV, "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def resolve(cmd: list[str]) -> list[str]:
     """C9: Core 자신의 스크립트(harness/*.py)는 Core 를 돌리는 인터프리터로 실행한다. 나머지는 어댑터가 푼다."""
     if len(cmd) > 1 and cmd[0] == "python" and cmd[1].replace("\\", "/").startswith("harness/"):
-        return [sys.executable, *cmd[1:]]
+        return [sys.executable, "-B", *cmd[1:]]
     return ADAPTER.resolve_command(cmd)
 
 
@@ -173,6 +177,8 @@ def traceability_gate(gate: dict) -> tuple[bool, str]:
 
 
 def mutation_gate(gate: dict) -> tuple[bool, str]:
+    global LAST_MUTATION
+    LAST_MUTATION = None
     if gate.get("expected_tool_config"):
         mismatch = ADAPTER.mutation_config_mismatch(gate["expected_tool_config"])
         if mismatch:
@@ -187,6 +193,16 @@ def mutation_gate(gate: dict) -> tuple[bool, str]:
     undetected -= len(excluded)
     denom = detected + undetected
     total = s.get("total", denom)
+    counts = {
+        "total": total,
+        "killed": s.get("killed", 0),
+        "survived": s.get("survived", 0),
+        "timeout": s.get("timeout", 0),
+        "no_tests": s.get("no_tests", 0),
+        "excluded": len(excluded),
+    }
+    # 정수가 아닌 집계(실수 · bool)는 잘라 저장하지 않는다 — 비교 근거로 쓸 수 없으면 집계 없음 (WO-H80 리드 보정, 경계 사례 R01)
+    LAST_MUTATION = counts if all(type(v) is int for v in counts.values()) else None
     if total > 0 and s.get("killed", 0) == 0 and s.get("survived", 0) == 0 and detected == 0:
         return False, "변이 전 테스트가 실패한다 — G2 를 먼저 통과시킬 것"
     if denom == 0:
@@ -217,6 +233,20 @@ def equivalent_survivors(rules: list[str]) -> list[tuple[str, str]]:
         if rule:
             out.append((mid, rule))
     return out
+
+
+def gate_result(gate: dict, passed, seconds: float, detail: str) -> dict:
+    """게이트 실행 결과 항목을 조립한다 (WO-H80)."""
+    entry = {
+        "id": gate["id"],
+        "name": gate["name"],
+        "passed": passed,
+        "seconds": round(seconds, 1),
+        "detail": detail,
+    }
+    if gate.get("kind") == "mutation" and isinstance(LAST_MUTATION, dict):
+        entry["mutation"] = dict(LAST_MUTATION)
+    return entry
 
 
 def test_report_check(gate: dict) -> tuple[bool, str]:
@@ -288,15 +318,112 @@ def g0_review_required(g0: dict | None) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--role", required=True)
-    ap.add_argument("--base", required=True)
+    ap.add_argument("--role", default=None, help="역할")
+    ap.add_argument("--base", default=None, help="기준 커밋")
     ap.add_argument("--only", default="")
     ap.add_argument("--feedback", action="store_true", help="판정 전 피드백 모드 (HD-24)")
     ap.add_argument("--keep-going", action="store_true")
     ap.add_argument("--slice", default="", help="config/slices.toml 의 슬라이스 ID. 없으면 전체 게이트")
     ap.add_argument("--wo", default="", help="작업 지시서 ID (예: WO-02). KPI 를 지시서별로 묶는다")
     ap.add_argument("--cause", choices=["implementer", "test", "harness"], default=None, help="판정 실행 원인 (implementer | test | harness)")
+    ap.add_argument("--execution", default="", help="실행 계약 ID 연결 (reports/executions/<ID>/contract.json)")
     args = ap.parse_args()
+
+    contract = {}
+    if args.execution:
+        contract_file = ROOT / "reports" / "executions" / args.execution / "contract.json"
+        if not contract_file.is_file():
+            print(f"실행 계약 파일을 찾을 수 없습니다: {contract_file}", file=sys.stderr)
+            return 2
+        try:
+            contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"실행 계약 파싱 실패: {e}", file=sys.stderr)
+            return 2
+        # 1. 역할 대조
+        if args.role and args.role != contract.get("role"):
+            print(f"실행 계약의 역할 '{contract.get('role')}' 과 인자 '{args.role}' 가 일치하지 않습니다", file=sys.stderr)
+            return 2
+        if not args.role:
+            args.role = contract.get("role")
+
+        # 2. 기준 커밋 대조
+        contract_base = contract.get("base")
+        if args.base:
+            p_b = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{args.base}^{{commit}}"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            resolved_b = p_b.stdout.strip() if p_b.returncode == 0 else args.base
+            if args.base != contract_base and resolved_b != contract_base:
+                print(f"실행 계약의 기준 커밋 '{contract_base}' 과 인자 '{args.base}' 가 일치하지 않습니다", file=sys.stderr)
+                return 2
+        if not args.base:
+            args.base = contract_base
+
+        # 3. 작업 지시서(wo) 대조
+        contract_wo = contract.get("wo", "")
+        if args.wo and args.wo != contract_wo:
+            print(f"실행 계약의 작업 지시서 '{contract_wo}' 과 인자 '{args.wo}' 가 일치하지 않습니다", file=sys.stderr)
+            return 2
+        if not args.wo:
+            args.wo = contract_wo
+
+        # 4. 슬라이스(slice) 대조
+        contract_slice = contract.get("slice", "")
+        if args.slice and args.slice != contract_slice:
+            print(f"실행 계약의 슬라이스 '{contract_slice}' 과 인자 '{args.slice}' 가 일치하지 않습니다", file=sys.stderr)
+            return 2
+        if not args.slice:
+            args.slice = contract_slice
+
+        # 5. origin/state 드리프트 또는 승인된 역할 인계(handover) 검증
+        import execution
+        try:
+            execution._validate_origin_drift_with_handover(ROOT, contract)
+        except Exception as e:
+            print(f"원본 또는 역할 상태 검증 실패: {e}", file=sys.stderr)
+            return 2
+
+        # execution 경계로 연결하여 신뢰 scratch clone+diff overlay에서 전체 slice gates 실행
+        ws_path = Path(contract["workspace"]).resolve()
+        start_snap = contract.get("worker_start_snapshot", {})
+        cur_snap = execution._snapshot_directory(ws_path)
+        changed_files = execution._diff_snapshots(start_snap, cur_snap)
+
+        extra_args = []
+        if args.only:
+            extra_args.extend(["--only", args.only])
+        if args.feedback:
+            extra_args.append("--feedback")
+        if args.keep_going:
+            extra_args.append("--keep-going")
+
+        res = execution._run_trusted_gates(
+            ROOT,
+            args.base,
+            args.role,
+            changed_files,
+            ws_path,
+            run_id=args.execution,
+            wo=args.wo,
+            slice_id=args.slice,
+            full_slice=True,
+            extra_args=extra_args,
+        )
+        return res["returncode"]
+
+    if not args.role:
+        print("오류: --role 은 필수 인자입니다 (또는 유효한 --execution 지정 필요)", file=sys.stderr)
+        return 2
+    if not args.base:
+        print("오류: --base 는 필수 인자입니다 (또는 유효한 --execution 지정 필요)", file=sys.stderr)
+        return 2
+
     if args.cause is None:
         args.cause = "implementer" if args.role == "implementer" else "test"
 
@@ -420,9 +547,12 @@ def main() -> int:
     results = []
     all_passed = True
 
+    global LAST_MUTATION
     for gate in gates:
         if target_only and gate["id"] not in target_only:
             continue
+        # 변이 게이트가 환경 부족 등으로 mutation_gate 를 거치지 않아도 앞 게이트의 집계가 붙지 않게 (WO-H80 리드 보정)
+        LAST_MUTATION = None
         t0 = time.monotonic()
         if gate["id"] in sl.get("skip", {}):
             # 범위 밖은 '통과'가 아니라 SKIP 으로 남긴다. 전체 판정에서는 세지 않는다
@@ -459,13 +589,7 @@ def main() -> int:
                 details.append(summary)
             detail = "\n".join(details)
 
-        results.append({
-            "id": gate["id"],
-            "name": gate["name"],
-            "passed": passed,
-            "seconds": round(time.monotonic() - t0, 1),
-            "detail": detail,
-        })
+        results.append(gate_result(gate, passed, time.monotonic() - t0, detail))
         print(f"{gate['id']} {'PASS' if passed else 'FAIL'}  {gate['name']}")
         all_passed &= passed
         if not passed and not args.keep_going:
@@ -529,6 +653,8 @@ def main() -> int:
         "exit_code": 0 if all_passed else 1,
         "verdict": base_verdict,
     }
+    if args.execution:
+        evidence["execution_id"] = args.execution
     report = json.dumps(
         {"wo": args.wo, "slice": args.slice, "role": args.role, "cause": args.cause, "base": args.base, "started": started,
          "passed": all_passed, "gates": results, "evidence": evidence},
@@ -537,8 +663,18 @@ def main() -> int:
     )
     REPORT.parent.mkdir(exist_ok=True)
     REPORT.write_text(report, encoding="utf-8", newline="\n")
+    if args.execution:
+        exec_gate_rep = ROOT / "reports" / "executions" / args.execution / "gate_report.json"
+        try:
+            exec_gate_rep.write_text(report, encoding="utf-8", newline="\n")
+        except Exception:
+            pass
     RUNS.mkdir(exist_ok=True)
     run_file = RUNS / f"{started.replace(':', '')}_{args.wo or 'none'}_{args.role}.json"
+    n = 2
+    while run_file.exists():  # 같은 초의 실행이 앞 기록을 덮지 않게 (WO-H44 M06)
+        run_file = RUNS / f"{started.replace(':', '')}_{args.wo or 'none'}_{args.role}-{n}.json"
+        n += 1
     run_file.write_text(report, encoding="utf-8", newline="\n")
     g0 = next((r for r in results if r["id"] == "G0"), None)
     failed_cases: int | None = None
@@ -569,6 +705,9 @@ def main() -> int:
         failed_cases=failed_cases,
         seconds=round(sum(r["seconds"] for r in results), 1),
         run_file=run_file.relative_to(ROOT).as_posix(),
+        purpose="self_check" if only else "verdict",
+        gate_seconds={r["id"]: r["seconds"] for r in results},
+        target_sha=target_sha,
     )
     skipped = [r["id"] for r in results if r["passed"] is None]
     verdict = base_verdict

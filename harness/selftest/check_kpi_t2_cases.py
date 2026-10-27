@@ -20,7 +20,8 @@ C 집계 (kpi.py):
     (n = 중복을 뺀 작업 수, 제안이 아니면 value = None). time_observations(이벤트) → {묶음 키: [{"task", "value", "censored"}]}.
     task 는 (wo, task) 를 구분하는 값, seconds 를 모르는 기록과 time_scope 가 "model_activity" 가 아닌 기록은 빠진다.
   - 수집기는 time_scope 를 남긴다: AGY · Codex = "model_activity", 위임 도구 결과 = "delegation_total" (C11~C13 · D08).
-D 수집기 (scripts/collect_usage.py, Core 밖, 지정한 파일만 읽는 오프라인 도구):
+D 수집기 (adapters/tools/collect_usage.py, Core 밖 · 소비 프로젝트에 배포, 지정한 파일만 읽는 오프라인 도구,
+  자기 저장소의 harness 로 자기 저장소 reports/ 에 기록 — WO-H40):
   --agy-transcript <transcript.jsonl> | --codex-session <rollout.jsonl> | --delegation-job <위임 도구의 .jobs/<job> 폴더> 중 하나와
   --wo · --role (필수), --task · --round · --tier · --risk · --exec-path · --model · --cap-kind/--cap-value/--cap-unit ·
   --stop-reason/--stop-by. run_id: AGY = transcript 의 대화 폴더 이름, Codex = session_meta.id, 위임 도구 = result.json conversation_id
@@ -49,9 +50,6 @@ def make_project(base: Path, name: str) -> Path:
     proj = base / name
     shutil.copytree(ROOT / "harness", proj / "harness", ignore=shutil.ignore_patterns("__pycache__", "selftest"))
     shutil.copytree(ROOT / "adapters", proj / "adapters", ignore=shutil.ignore_patterns("__pycache__"))
-    (proj / "scripts").mkdir()
-    if (ROOT / "scripts" / "collect_usage.py").exists():
-        shutil.copy2(ROOT / "scripts" / "collect_usage.py", proj / "scripts" / "collect_usage.py")
     (proj / "config").mkdir()
     (proj / "config" / "gates.toml").write_text('[harness]\nadapter = "python"\n', encoding="utf-8", newline="\n")
     (proj / "reports").mkdir()
@@ -99,7 +97,7 @@ def kpi_section(proj: Path, title: str) -> tuple[list[dict[str, str]], str]:
 def usage(run_id: str, agent: str = "agy", **f: object) -> dict:
     e = {"kind": "model_usage", "wo": "WO-X1", "task": "T1", "role": "implementer", "agent": agent, "model": "m1",
          "run_id": run_id, "round": 1, "started": "2026-10-18T10:00:00Z", "ended": "2026-10-18T10:05:00Z",
-         "seconds": 300.0, "time_scope": "model_activity", "model_calls": 10,
+         "seconds": 300.0, "time_scope": "model_activity", "time_source": "measured_activity_intervals", "model_calls": 10,
          "tokens": {"input": 100, "output": 10, "cache_read": 50, "cache_in_input": False},
          "cap": None, "stop": None, "tier": "T2", "risk": "low",
          "condition": {"exec_path": "orca", "permission": "accept-edits"}, "source": "fixture"}
@@ -172,6 +170,11 @@ def main() -> int:
         r2 = run(p, "harness/mark.py", "review", "codex", "--wo", "WO-X1", "--round", "1", "--defects", "-1")
         case("A02 review: --round 없음 · 음수 결함 → 2, 기록 없음", r1.returncode == 2 and r2.returncode == 2
              and len(events(p)) == 1, f"{r1.returncode},{r2.returncode} n={len(events(p))}")
+        # WO-H37 (결정 a): 모르는 결함 수를 0 으로 남기지 않는다
+        r1 = run(p, "harness/mark.py", "review", "codex", "--wo", "WO-X1", "--round", "2")
+        r2 = run(p, "harness/mark.py", "note", "메모", "--wo", "WO-X1", "--defects", "0")
+        case("A06 review: --defects 생략 → 2 · 다른 동작에 --defects → 2, 기록 없음", r1.returncode == 2
+             and r2.returncode == 2 and len(events(p)) == 1, f"{r1.returncode},{r2.returncode} n={len(events(p))}")
         r = run(p, "harness/mark.py", "budget-extend", "실패 사례 4→2 감소", "--wo", "WO-X1")
         e = (events(p) or [{}])[-1]
         case("A03 budget-extend → budget_extend + 이유", r.returncode == 0 and e.get("kind") == "budget_extend"
@@ -327,14 +330,14 @@ def main() -> int:
 
         # ── D 수집기 ──
         # 공개본(비공개 도구 · dev/ 없음)에서는 수집기 실행 사례를 건너뛴다. 비공개 저장소에서 도구가 없으면 실패한다.
-        if not (ROOT / "scripts" / "collect_usage.py").exists() and not (ROOT / "dev").exists():
+        if not (ROOT / "adapters" / "tools" / "collect_usage.py").exists() and not (ROOT / "dev").exists():
             print("알림: 비공개 도구가 없는 공개본이라 수집기 사례(D01~D06 · D08)를 건너뜁니다.")
         else:
             p = make_project(base, "d")
-            has_tool = (p / "scripts" / "collect_usage.py").exists()
+            has_tool = (p / "adapters" / "tools" / "collect_usage.py").exists()
             conv = "7eb337f8-0000-0000-0000-000000000001"
             tr = agy_transcript(base, conv)
-            r = run(p, "scripts/collect_usage.py", "--agy-transcript", str(tr), "--wo", "WO-X1", "--role", "implementer",
+            r = run(p, "adapters/tools/collect_usage.py", "--agy-transcript", str(tr), "--wo", "WO-X1", "--role", "implementer",
                     "--task", "T1", "--round", "1", "--tier", "T2", "--risk", "low", "--exec-path", "orca",
                     "--model", "gemini-3.8-flash-high")
             e = [x for x in events(p) if x.get("kind") == "model_usage"]
@@ -345,12 +348,12 @@ def main() -> int:
                  and u.get("model_calls") == 2 and u.get("started") == "2026-10-18T08:34:28Z"
                  and u.get("ended") == "2026-10-18T08:37:33Z" and u.get("seconds") == 185.0, (r.stdout + r.stderr)[-120:] + str(u)[:60])
             job = agent_kit_job(base, conv)
-            r = run(p, "scripts/collect_usage.py", "--delegation-job", str(job), "--wo", "WO-X1", "--role", "implementer")
+            r = run(p, "adapters/tools/collect_usage.py", "--delegation-job", str(job), "--wo", "WO-X1", "--role", "implementer")
             n = len([x for x in events(p) if x.get("kind") == "model_usage"])
             case("D02 같은 run 의 위임 도구 결과를 다시 넣음 → 기록 안 함, ‘중복’, 종료 0",
                  has_tool and r.returncode == 0 and n == 1 and "중복" in r.stdout, (r.stdout + r.stderr)[-140:])
             cs = codex_session(base, "01a14eb2-0000-0000-0000-000000000002", "danger-full-access")
-            r = run(p, "scripts/collect_usage.py", "--codex-session", str(cs), "--wo", "WO-X1", "--role", "reviewer")
+            r = run(p, "adapters/tools/collect_usage.py", "--codex-session", str(cs), "--wo", "WO-X1", "--role", "reviewer")
             e = [x for x in events(p) if x.get("kind") == "model_usage" and x.get("agent") == "codex"]
             u = e[0] if e else {}
             case("D03 Codex 세션 → run_id = session_meta.id, 마지막 누적 토큰(캐시 입력 포함), 모델, 권한, 샌드박스 해제 경고",
@@ -359,29 +362,29 @@ def main() -> int:
                  and u.get("model") == "gpt-6.1-sol" and "danger-full-access" in str(u.get("condition", {}).get("permission"))
                  and "경고" in r.stdout, (r.stdout + r.stderr)[-120:] + str(u)[:60])
             cs2 = codex_session(base, "01a14eb2-0000-0000-0000-000000000003", "workspace-write")
-            r = run(p, "scripts/collect_usage.py", "--codex-session", str(cs2), "--wo", "WO-X1", "--role", "reviewer")
+            r = run(p, "adapters/tools/collect_usage.py", "--codex-session", str(cs2), "--wo", "WO-X1", "--role", "reviewer")
             case("D04 workspace-write Codex 세션 → 경고 없음", has_tool and r.returncode == 0 and "경고" not in r.stdout,
                  (r.stdout + r.stderr)[-120:])
             before = len(events(p))
-            r1 = run(p, "scripts/collect_usage.py", "--agy-transcript", str(base / "nope.jsonl"), "--wo", "WO-X1", "--role", "implementer")
+            r1 = run(p, "adapters/tools/collect_usage.py", "--agy-transcript", str(base / "nope.jsonl"), "--wo", "WO-X1", "--role", "implementer")
             bad = base / "bad.jsonl"
             bad.write_text("not json\n", encoding="utf-8")
-            r2 = run(p, "scripts/collect_usage.py", "--codex-session", str(bad), "--wo", "WO-X1", "--role", "reviewer")
-            r3 = run(p, "scripts/collect_usage.py", "--agy-transcript", str(tr))
+            r2 = run(p, "adapters/tools/collect_usage.py", "--codex-session", str(bad), "--wo", "WO-X1", "--role", "reviewer")
+            r3 = run(p, "adapters/tools/collect_usage.py", "--agy-transcript", str(tr))
             case("D05 없는 파일 · 못 읽는 형식 · --wo/--role 없음 → 2, 기록 없음",
                  has_tool and (r1.returncode, r2.returncode, r3.returncode) == (2, 2, 2) and len(events(p)) == before,
                  f"{r1.returncode},{r2.returncode},{r3.returncode}")
-            r = run(p, "scripts/collect_usage.py", "--agy-transcript", str(tr), "--wo", "WO-X1", "--role", "implementer",
+            r = run(p, "adapters/tools/collect_usage.py", "--agy-transcript", str(tr), "--wo", "WO-X1", "--role", "implementer",
                     "--cap-kind", "time", "--cap-value", "600", "--cap-unit", "s", "--stop-reason", "cap", "--stop-by", "lead")
             case("D06 같은 transcript 다시 → 중복 (cap 인자가 달라도 run 은 한 번)", has_tool and "중복" in r.stdout
                  and len(events(p)) == before, (r.stdout + r.stderr)[-120:])
             scopes = {(x.get("agent"), x.get("time_scope")) for x in events(p) if x.get("kind") == "model_usage"}
             p3 = make_project(base, "d3")
             job3 = agent_kit_job(base / "d3job", "conv-only-job") if (base / "d3job").mkdir() is None else None
-            r = run(p3, "scripts/collect_usage.py", "--delegation-job", str(job3), "--wo", "WO-X1", "--role", "implementer")
+            r = run(p3, "adapters/tools/collect_usage.py", "--delegation-job", str(job3), "--wo", "WO-X1", "--role", "implementer")
             jscope = [x.get("time_scope") for x in events(p3) if x.get("kind") == "model_usage"]
-            case("D08 time_scope: AGY · Codex = model_activity, 위임 도구 결과 = delegation_total",
-                 has_tool and ("agy", "model_activity") in scopes and ("codex", "model_activity") in scopes
+            case("D08 time_scope: AGY · Codex = transcript_span, 위임 도구 결과 = delegation_total",
+                 has_tool and ("agy", "transcript_span") in scopes and ("codex", "transcript_span") in scopes
                  and jscope == ["delegation_total"], f"{scopes} {jscope} {(r.stdout + r.stderr)[-80:]}")
         case("D07 수집기는 Core 밖 (harness/ 에 공급자 로그 형식 문자열이 없다)",
              not any(s in (ROOT / "harness" / f).read_text(encoding="utf-8")

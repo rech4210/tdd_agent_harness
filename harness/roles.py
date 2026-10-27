@@ -583,10 +583,47 @@ def main() -> int:
         ap.add_argument("--slice", help="슬라이스 ID (지정하면 assignments.toml 에 배정 추가)")
         ap.add_argument("--dry-run", action="store_true", help="바뀔 내용만 출력하고 파일을 바꾸지 않음")
         ap.add_argument("--ask", action="store_true", help="대화형 마법사로 역할 설정")
+        ap.add_argument("--activate", action="store_true", help="역할 상태 활성화 (WO-H63)")
+        ap.add_argument("--handover", action="store_true", help="진행 중 lead 교체 (WO-H64)")
+        ap.add_argument("--approval-ref", help="승인 참조 (<commit>:<path>#<id>)")
+        ap.add_argument("--recover", action="store_true", help="실패/중단된 상태 복구 활성화")
+        ap.add_argument("--check", action="store_true", help="현재 역할 상태 정합성 검사")
         args = ap.parse_args()
+
+        if args.check:
+            import role_state
+            return role_state.check(ROOT)
+
+        if args.activate:
+            if not args.preset:
+                print("오류: --activate 에는 --preset <이름> 이 필수입니다", file=sys.stderr)
+                return 1
+            if not args.approval_ref:
+                print("오류: --activate 에는 --approval-ref <참조> 가 필수입니다", file=sys.stderr)
+                return 1
+            import role_state
+            return role_state.activate(
+                root=ROOT,
+                preset_name=args.preset,
+                approval_ref=args.approval_ref,
+                dry_run=args.dry_run,
+                recover=args.recover,
+                handover=args.handover,
+            )
 
         if args.list:
             return list_presets()
+
+        state_file = ROOT / "config" / "role-state.json"
+        if state_file.is_file() and (args.preset or args.ask):
+            print(
+                "오류: 활성 역할 상태(config/role-state.json)가 존재합니다. "
+                "레거시 --preset/--ask 쓰기 우회가 금지됩니다. "
+                "--activate --approval-ref 를 사용하십시오.",
+                file=sys.stderr,
+            )
+            return 1
+
         if args.ask:
             return ask_wizard(dry_run=args.dry_run)
         if not args.preset:

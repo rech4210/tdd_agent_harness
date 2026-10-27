@@ -90,3 +90,35 @@ Windows PowerShell에서는 `git archive --format=zip -o base.zip $BASE -- <경�
 | 격리 저장소 이름, 위임한 에이전트, 회차 | 종료 기록 머리말 · 경과 |
 | 허용 밖 변경 (버린 것) | 종료 기록 KPI "G0 위반" |
 | 위임 도구 문제 | 문제 기록 (환경) |
+| 사용량 (토큰 · 시간 · 호출 수) | `python adapters/tools/collect_usage.py` 로 위임마다 `reports/events.jsonl` 에 (`model_usage`) |
+
+## 5. 오케스트레이터로 실행 (예: Orca)
+
+오케스트레이터는 **실행 · 세션 층**이다. 판정 · 시간 상한 · 병합은 하네스가 따로 통제한다(판정은 작업 공간 diff · 게이트 · 에이전트 자체 기록만 쓴다).
+
+| 작업자 | 띄우는 방법 | 완료 · 판정 |
+|:---|:---|:---|
+| 편집 전용 (명령 권한 없음, 예: AGY) | 격리 저장소를 등록하고 작업 공간 + 에이전트 + 지시를 한 번에: `orca repo add --path <격리 저장소>` → `orca worktree create --repo id:<저장소 id> --name <이름> --agent <에이전트> --model <모델> --base-branch <브랜치> --no-parent --prompt "<한 줄>"`. 감독 모드는 쓰지 않는다(감독 지시가 명령 실행을 요구해 편집 전용과 충돌). `--base-branch` 는 지시 파일을 커밋한 커밋으로 주고, 만든 직후 작업 공간에 지시 파일이 있는지 확인한다 | 아래 **감시 도구**를 붙이고, 끝나면 **lead 가 diff · 게이트로 판정** |
+| 명령 실행 가능 (예: Codex) | 편집 전용과 같은 방식(`worktree create`). 샌드박스를 유지하면 작업자가 오케스트레이터에 완료를 보고할 수 없으므로(실행 정보 파일을 못 읽음) 감독 모드에 기대지 않는다. 질문 없이 끝까지 가는 지시를 준다 | 감시 도구 + 작업자 세션 로그(완료 · 오류 기록)와 산출물로 끝을 확인, lead 가 판정. Codex 는 지시한 커밋을 하지 않을 수 있다 → lead 가 작업 공간의 `reports/review/*.md` 를 복사해 회수한다. |
+
+**문서 점검 (읽기 전용, HD-52):** 문서 최신화 1단계 점검 Codex 는 Orca 밖에서 실행 환경으로 읽기 전용을 건다 — `python adapters/tools/codex_audit.py --workspace <깨끗한 작업 사본> --prompt-file <지시> --out <작업 사본 밖 결과 파일> [--model gpt-6-luna] [--cap-seconds 900]`. 내부 명령은 `codex exec -s read-only` 고정, 실행 전 작업 사본이 깨끗해야 하고 실행 뒤 바뀌었으면 종료 1, 상한이면 프로세스 트리 전체를 끝내고 종료 3. 결과는 lead 가 `reports/review/` 에 옮기고 편집 목록으로 판정한다. 편집(`doc_editor`) 뒤에는 `run_gates.py --role doc_editor --only G0 --base <점검 기준>` 와 `python adapters/tools/check_handoff_state.py --base <점검 기준>`(`상태:` 줄은 lead 만)를 확인한다.
+
+**감시 도구** (`adapters/tools/orca_watch.py`, upgrade 로 배포): 워커마다 별도 PowerShell 창에서 화면과 작업 공간 변경 파일 수를 간격(기본 60초)마다 보이고, 중간 확인(상한 10분이면 3 · 6 · 10분, 20분이면 5분 간격)을 로그에 한 줄씩 남긴다. 상한이면 lead 세션과 상관없이 작업자에 중단 신호를 보내고 사용량 기록(`model_usage` 의 `cap` · `stop`)을 남긴다. 모델 밖에서 돌아 토큰을 쓰지 않으며, lead 는 로그(`reports/watch/<WO>-<핸들>.log`)만 읽는다.
+
+```powershell
+Start-Process powershell -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File','adapters\tools\orca_watch.ps1','--terminal','<handle>','--workspace','<작업 공간>','--agent','agy','--wo','<WO>','--role','implementer','--cap-seconds','600'
+```
+
+종료 코드: 0 = 작업자 끝남(유휴 · 터미널 없음, 사용량은 lead 가 `adapters/tools/collect_usage.py` 로 수집), 3 = 상한 중지(기록까지 함), 2 = 인자 오류. 로그에 “중단 신호 실패”가 있으면 lead 가 직접 멈춘다.
+
+| 함정 | 대처 |
+|:---|:---|
+| 지시(`--prompt`)에 큰따옴표가 든 여러 줄을 넘기면 Windows 에서 인자가 쪼개져 에이전트가 즉시 끝난다 | 지시를 격리 저장소에 파일로 커밋하고, 큰따옴표 없는 한 줄로 “그 파일을 읽고 따르라”고 넘긴다 |
+| 편집 전용 작업자에게 테스트 실행을 시킴 | 명령 권한이 없다. “사례를 실행하지 말고 읽어서 맞추라”고 쓴다 |
+| 무인 실행 | 오케스트레이터의 대기 체크포인트는 실행 상한이 아니다. 감시 도구가 상한 자동 중지를 맡는다 |
+| 지시 파일이 작업 공간에 없음 | 작업 공간이 원격 추적 브랜치에서 만들어지면 로컬로 커밋한 지시가 빠진다. 명령 권한이 없는 작업자는 실패하지 않고 파일을 찾느라 상한까지 시간을 쓴다 → `--base-branch <지시 커밋>` + 만든 직후 확인 |
+| 끝난 뒤 | 증거(지시 · transcript · diff)를 보관하고 `orca worktree rm --worktree path:<경로> --force` |
+| 감시 창 안 글자를 클릭 · 선택하면 콘솔이 일시 정지(QuickEdit)하고 상한 자동 중지도 멈춘다 | 감시 창은 클릭하지 않는다. 제목이 ‘선택’이면 Esc |
+| Orca 앱이 꺼지면 작업자도 끝나고 `terminal` 명령이 ‘Orca is not running’ | `orca worktree list` 로 응답 확인, `orca open` 뒤 새 작업 공간으로 다시 위임(잃은 회차도 1칸) |
+
+위임 전에 작업자의 권한 설정(샌드박스 해제 · 권한 생략 인자가 없는지, 편집 전용 작업자의 명령 차단)을 확인한다.

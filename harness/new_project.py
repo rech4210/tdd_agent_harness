@@ -4,7 +4,7 @@
 새 git 저장소를 초기화하며, 프로젝트 틀 문서를 렌더링하고 골격을 만든다.
 
 사용:
-  python harness/new_project.py <대상 폴더> --package <이름> [--roles <프리셋>] [--upstream <주소>]
+  python harness/new_project.py <대상 폴더> --package <이름> [--roles <프리셋>] [--upstream <주소>] [--commit]
 """
 
 from __future__ import annotations
@@ -181,6 +181,7 @@ def main() -> int:
     ap.add_argument("--package", required=True, help="프로젝트 패키지 이름 (^[a-z_][a-z0-9_]*$)")
     ap.add_argument("--roles", help="역할 프리셋 이름")
     ap.add_argument("--upstream", help="상류 저장소 주소")
+    ap.add_argument("--commit", action="store_true", help="생성 완료 후 첫 커밋")
     args = ap.parse_args()
 
     target_path = Path(args.target).resolve()
@@ -254,6 +255,26 @@ def main() -> int:
                 print("대상 폴더가 일부만 만들어졌다. 지우고 다시 실행", file=sys.stderr)
                 return 1
 
+        # P7.5: --commit 옵션
+        if args.commit:
+            # 작성자는 사용자 git 설정을 그대로 쓴다. 없으면 커밋이 실패하고 이유를 출력한다 (가짜 작성자를 만들지 않는다)
+            add_proc = subprocess.run(
+                ["git", "add", "-A"],
+                cwd=target_path, capture_output=True, text=True
+            )
+            if add_proc.returncode != 0:
+                print(f"오류: git add 실패: {add_proc.stderr.strip()}", file=sys.stderr)
+                return 1
+            commit_msg = f"init: project from agent-harness {head_full[:7]}"
+            commit_proc = subprocess.run(
+                ["git", "commit", "-m", commit_msg],
+                cwd=target_path, capture_output=True, text=True
+            )
+            if commit_proc.returncode != 0:
+                err = commit_proc.stderr.strip() or commit_proc.stdout.strip()
+                print(f"오류: git commit 실패: {err}", file=sys.stderr)
+                return 1
+
     except Exception as e:
         print(f"오류: {e}", file=sys.stderr)
         if target_created:
@@ -261,14 +282,16 @@ def main() -> int:
         return 1
 
     # P8: 다음 단계 출력
-    print(
-        "\n다음 단계:\n"
-        "  1. 생성된 파일을 확인하고 첫 커밋: git add -A && git commit -m \"init\"\n"
-        "  2. 프로젝트 원격(origin) 추가 및 푸시: git remote add origin <주소> && git push -u origin main\n"
-        "  3. Spec Kit 초기화: specify init --here && specify preset add --dev templates/sdd/preset --priority 1\n"
-        "  4. 역할 프리셋 확인: python harness/roles.py --list\n"
-        "     (적용: python harness/roles.py --preset <이름> [--slice <ID>])"
-    )
+    next_steps = []
+    if not args.commit:
+        next_steps.append("생성된 파일을 확인하고 첫 커밋: git add -A && git commit -m \"init\"")
+    next_steps.append("프로젝트 원격(origin) 추가 및 푸시: git remote add origin <주소> && git push -u origin main")
+    next_steps.append("Spec Kit 초기화: specify init --here && specify preset add --dev templates/sdd/preset --priority 1")
+    next_steps.append("역할 프리셋 확인: python harness/roles.py --list\n     (적용: python harness/roles.py --preset <이름> [--slice <ID>])")
+
+    print("\n다음 단계:")
+    for idx, step in enumerate(next_steps, 1):
+        print(f"  {idx}. {step}")
     return 0
 
 

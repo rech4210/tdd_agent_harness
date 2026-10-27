@@ -32,11 +32,11 @@ flowchart TB
 | 1 | 테스트 작성 | 테스트 작성자 | 선언된 범위로 테스트 작성 · 보강. 모듈 머리말에 지키는 ID 인용 | `templates/test-skeletons/`, 설계 근거 `templates/test-design/01 ~ 09` |
 | 1.5 | 추적성 확인 (GT) | 테스트 작성자 | 테스트 작성자 쪽에서 추적성 게이트(`traceability.py`) 자체 통과 확인 (양방향 추적성, `[NEEDS CLARIFICATION]` 0건, 가정 · 명확화 승격) | 게이트 GT 결과, `harness/traceability.py` |
 | 2 | H3 승인 | 테스트 작성자 → 사람 | 게으른 구현 검증 → 승인 자료 → 열린 질문을 D-xx로 → 승인 | `templates/test-design/10`, `templates/h3-approval.md`, `templates/checklist.md` |
-| 3 | 잠금 | 사람 | `python harness/check_protected_paths.py --write-lock` (테스트와 명세가 바뀌었을 때만: `locked = ["tests/**", "specs/**"]`). 지시서 확정 · 커밋 · 기준 태그 | `templates/work-order-implementer.md`, 태그 `<slice>-base` |
+| 3 | 잠금 | 사람 승인 → lead 실행 | H3 승인 직후 · 위임 전에 lead 가 `python harness/check_protected_paths.py --write-lock` (테스트와 명세가 바뀌었을 때만: `locked = ["tests/**", "specs/**"]`). 지시서 확정 · 커밋 · 기준 태그 | `templates/work-order-implementer.md`, 태그 `<slice>-base` |
 | 4 | 격리 위임 | lead → 구현자 | 필요한 파일만 격리 저장소로, 아무 에이전트 도구로 위임, 쓰기 허용 경로의 diff만 회수 | `docs/isolated-delegation.md` |
 | 5 | 세션 밖 판정 | lead (실행만) | main에서 게이트 명령. 판정은 명령의 결과뿐이다. 실패를 원인별로 나눈다 (§4) | 판정 보고 · 실행 이력 |
 | 6 | 생존 변이 분류 | 변이 분류자 → 사람 (H9) | 생존 변이를 유형별로 처리 (§5) | 문제 기록, 결정 기록 |
-| 7 | 종료 | 사람 | 종료 기록 작성 · 커밋 · 종료 태그 | `templates/slice-closure.md`, 태그 `<slice>-closed` |
+| 7 | 종료 | lead (H9 대상이 있으면 사람) | 게이트 통과이고 사람 판정이 필요한 생존 변이가 없으면 lead 가 종료 기록 작성 · 커밋 · 종료 태그. 있으면 사람이 H9 뒤 종료 | `templates/slice-closure.md`, 태그 `<slice>-closed` |
 | (선택) | 레드팀 | 레드팀 (테스트 작성자와 다른 계열) | 위험 도메인(돈 · 동시성 · 개인정보 · 외부 시스템)에서 게이트를 통과하는 명세 위반 구현을 시도 | 검토 보고서, 문제 기록 |
 
 ## 3. 게이트 (순서가 의미를 가진다: 싸고 빠른 검사 → 비싸고 느린 검사)
@@ -86,8 +86,12 @@ flowchart TB
 | 규칙 | 내용 |
 |:---|:---|
 | annotated | `git tag -a`. 경량 태그를 쓰지 않는다 |
+| 누가 | 커밋 · 로컬 태그는 lead. 기준 태그는 사람의 H3 승인 직후 · 위임 전에만 단다. **기존 태그를 옮기거나 지우지 않는다**(기준 태그는 G0 판정의 기준점). push · 병합은 사람 지시로만 |
 | 기준 태그 = 판정 기준 | 게이트의 `--base`와 리드타임 시작점이 기준 태그다. 지시서 확정 뒤 하네스 · 보고서 커밋이 쌓여도 기준은 움직이지 않는다 |
 | 재잠금 시 | 테스트를 고쳐 재잠금하면 새 기준 커밋에서 판정한다. 기준 태그를 옮기지 말고 경과를 종료 기록에 적는다 |
 | 실패 · 되돌림 | 태그를 달지 않는다. 문제 기록에 남긴다 |
 | 단계 중 판정 변화 | 같은 입력의 판정이 단계 중에 바뀌면 그 단계를 닫지 않는다 |
 | 이름 규칙 | 태그 패턴은 프로젝트 설정(KPI 집계가 읽는다) |
+| 슬라이스 초안 | `python harness/new_slice.py --slice <ID> --title <제목> --files <a,b> --tests <t> --risk <low|medium|high> [--depends <ID>]` 는 slices · 배정 블록 · 지시서 · 자동 승인 참조 초안을 출력만 한다(`--write` 면 `work_orders/` · `reports/` 에 파일, 덮어쓰기 없음). 설정 반영은 사람(H10). 게이트 덮어쓰기(`override.*`)는 직접 채운다 |
+| 문서 최신화 | 점검 = `doc_auditor`(Codex, `adapters/tools/codex_audit.py` 로 읽기 전용 고정 · 실행 뒤 작업 사본 변경 0 확인), 편집 = `doc_editor`(다른 계열, `docs/HANDOFF.md` · `reports/**` 만, `run_gates.py --role doc_editor --only G0`), 검증 = lead diff + 상태 줄 검사. 절차: `docs/isolated-delegation.md` §5 |
+| 증거 검사 | 위임 전 `python harness/step.py --slice <ID> --check delegate`, 종료 태그 전 `--check close`. 종료 1 이면 막힘 코드(D2 ~ D6 · C1 ~ C7)를 해소한 뒤 진행한다. 현재 단계 · 다음 일은 `--check` 없이 실행. 자동 승인(H3)은 `python harness/mark.py auto-approve <D-##> --wo <ID> --gt pass --lazy-caught N/M --residual-defects 0 --base-types unbounded,reject-preserve --by lead` 로 기록한다(조건 미달이면 사람 H3). 종료 기록 초안은 `python harness/step.py --slice <ID> --closure-draft`(stdout 만 · 미판정, 서술 · H9 칸은 비움 · 파일 · 태그를 쓰지 않음). 단계별 시각은 `python harness/kpi.py --timing` → `reports/tdd-timing.md`(kpi.md 는 그대로), additive 자동 승인: `python harness/mark.py auto-approve additive --wo <ID> --kind mutant-kill|regression --base <테스트 추가 직전 커밋 40자> --review-note "<무엇을 단언하는지>" --by lead`. 조건: 기준..HEAD 가 test_author 허용 경로의 새 일반 파일 추가뿐이고 그중 하나 이상이 잠금 범위 테스트, 잠금 파일 · 잠긴 테스트 그대로, 작업 트리 깨끗, 같은 기준으로 실행한 test_author 전체 게이트 통과 증거. mutant-kill 은 기준 커밋 전체 실행보다 미검출 변이가 줄어야 한다. 위험도 high 는 제외하며, 하나라도 아니면 사람 H3. 받아들인 위험: 현재 코드에서 통과하는 테스트는 버그를 포함한 현재 동작을 굳힐 수 있고 regression 은 빈 테스트를 기계로 막지 못하므로 리드가 `--review-note` 에 검토 내용을 남긴다. 자동 승인 적용 현황은 기본 `kpi.py` 보고서의 절 |

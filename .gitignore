@@ -4,3 +4,8 @@ __pycache__/
 # 판정 실행 산출물 (프로젝트 인계 H-11)
 reports/gate_report.json
 reports/runs/
+
+# Per-machine executable paths. Never ship one user's absolute tool locations.
+/.local-tools.json
+# Local isolated run origins and scratch files; recovery: dev/ARCHIVE-INDEX.md.
+/.jobs/

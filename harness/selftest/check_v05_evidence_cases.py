@@ -141,6 +141,9 @@ def e_cases(base: Path, results: list) -> None:
     # 프로젝트 쪽 캐시(harness/ 밖)는 프로젝트 책임이라 dirty 다.
     p = make_project(base, "e08")
     gates(p)
+    # 게이트가 -B 로 돌아 하네스 캐시가 저절로 생기지 않을 수 있다 — 전제(하네스 아래 캐시 존재)를 직접 만든다 (WO-H79)
+    (p / "harness" / "__pycache__").mkdir(exist_ok=True)
+    (p / "harness" / "__pycache__" / "fixture.cpython-311.pyc").write_bytes(b"0")
     gates(p)
     cache_dirs = [d.relative_to(p).as_posix() for d in (p / "harness").rglob("__pycache__")]
     first = report(p).get("evidence", {}).get("dirty")

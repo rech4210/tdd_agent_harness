@@ -268,8 +268,8 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     plan_parser = subparsers.add_parser("plan", help="Generate workspace plan")
-    plan_parser.add_argument("--base", required=True, help="Base commit-ish")
-    plan_parser.add_argument("--profile", required=True, help="Profile name")
+    plan_parser.add_argument("--base", default="HEAD", help="Base commit-ish (default: HEAD)")
+    plan_parser.add_argument("--profile", default="harness_dev", help="Profile name (default: harness_dev)")
     plan_parser.add_argument("--config", default="config/workspace.toml", help="Policy configuration path")
 
     args = parser.parse_args()
