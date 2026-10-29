@@ -1,14 +1,18 @@
-"""Orca 워커 실행 한 단계 도구 (WO-H78, HD-80).
+"""Orca 워커 실행 한 단계 도구 (WO-H78, HD-80, WO-H85).
 
 등록 실행(orca_execution.py manual-*, P2)과 분리된 하네스 개발 일회성 워커용이며 판정 · 승인을 하지 않는다.
 지시서 표현 검사(brief-check), 워커 실행 및 감시 백그라운드 구동(dispatch), 최종 응답 대기(await-final)를 제공한다.
+상설 원본에 파일을 올려 기준 커밋을 생성하는 stage와, 워커 작업 공간을 정리하는 release를 제공한다.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -325,6 +329,289 @@ def cmd_await_final(args: argparse.Namespace) -> int:
     return 3
 
 
+def _norm_path(p: str | Path) -> str:
+    """경로 비교 정규화: 역슬래시를 슬래시로, 중복 슬래시 제거, 끝 슬래시 제거, 대소문자 무시."""
+    s = str(p).replace("\\", "/")
+    while "//" in s:
+        s = s.replace("//", "/")
+    s = s.rstrip("/")
+    return s.casefold()
+
+
+def cmd_stage(args: argparse.Namespace) -> int:
+    """stage 서브명령 실행."""
+    # 계약 2: 원본을 건드리기 전에 모든 검사 완료 (어긋나면 종료 2)
+    # 1. 이름 정규식 검사
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", args.name):
+        print(f"오류: 이름이 규칙에 맞지 않습니다: {args.name!r}", file=sys.stderr)
+        return 2
+
+    # 2. ref 해석 검사
+    src_path = Path(args.src)
+    git_ref_res = subprocess.run(
+        ["git", "-C", str(src_path), "rev-parse", "--verify", f"{args.ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if git_ref_res.returncode != 0:
+        print(f"오류: ref를 커밋으로 해석할 수 없습니다: {args.ref}", file=sys.stderr)
+        return 2
+    base_ref_commit = git_ref_res.stdout.strip()
+
+    # 3. 각 file 상대 경로 및 src 내 일반 파일 검사
+    files = args.file if args.file is not None else []
+    for f_str in files:
+        fp = Path(f_str)
+        if fp.is_absolute() or bool(fp.drive) or os.path.isabs(f_str):
+            print(f"오류: 파일은 상대 경로여야 합니다 (절대/드라이브 경로 금지): {f_str}", file=sys.stderr)
+            return 2
+        if ".." in fp.parts:
+            print(f"오류: 파일 경로에 '..' 조각이 포함될 수 없습니다: {f_str}", file=sys.stderr)
+            return 2
+        full_src_file = src_path / fp
+        if not full_src_file.is_file():
+            print(f"오류: --src 작업 트리에 일반 파일이 존재하지 않습니다: {f_str}", file=sys.stderr)
+            return 2
+
+    # 4. origin이 이미 존재하면 git 저장소인지 검사
+    origin_path = Path(args.origin)
+    if origin_path.exists():
+        git_check = subprocess.run(
+            ["git", "-C", str(origin_path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if git_check.returncode != 0:
+            print(f"오류: 원본 경로가 git 저장소가 아닙니다: {origin_path}", file=sys.stderr)
+            return 2
+        try:
+            if Path(git_check.stdout.strip()).resolve() != origin_path.resolve():
+                print(f"오류: 원본 경로가 git 저장소 루트가 아닙니다: {origin_path}", file=sys.stderr)
+                return 2
+        except Exception:
+            print(f"오류: 원본 경로가 유효한 git 저장소가 아닙니다: {origin_path}", file=sys.stderr)
+            return 2
+
+    # 계약 3~5: 원본 준비, fetch, checkout, 파일 복사 및 커밋
+    if not origin_path.exists():
+        origin_path.parent.mkdir(parents=True, exist_ok=True)
+        clone_res = subprocess.run(
+            ["git", "clone", "-q", "--no-local", str(src_path), str(origin_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if clone_res.returncode != 0:
+            print(f"오류: git clone 실패: {clone_res.stderr}", file=sys.stderr)
+            return 1
+
+    fetch_res = subprocess.run(
+        ["git", "-C", str(origin_path), "fetch", "-q", "--no-tags", str(src_path), base_ref_commit],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if fetch_res.returncode != 0:
+        print(f"오류: git fetch 실패: {fetch_res.stderr}", file=sys.stderr)
+        return 1
+
+    checkout_res = subprocess.run(
+        ["git", "-C", str(origin_path), "checkout", "-q", "-f", "-B", f"stage/{args.name}", base_ref_commit],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if checkout_res.returncode != 0:
+        print(f"오류: git checkout 실패: {checkout_res.stderr}", file=sys.stderr)
+        return 1
+
+    diff_files = []
+    for f_str in files:
+        src_f = src_path / f_str
+        dst_f = origin_path / f_str
+        dst_f.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_f, dst_f)
+
+        cat_res = subprocess.run(
+            ["git", "-C", str(origin_path), "cat-file", "-e", f"{base_ref_commit}:{f_str}"],
+            capture_output=True,
+        )
+        if cat_res.returncode != 0:
+            diff_files.append(f_str)
+        else:
+            diff_res = subprocess.run(
+                ["git", "-C", str(origin_path), "diff", "--quiet", base_ref_commit, "--", f_str],
+                capture_output=True,
+            )
+            if diff_res.returncode != 0:
+                diff_files.append(f_str)
+
+    if diff_files:
+        add_res = subprocess.run(
+            ["git", "-C", str(origin_path), "add", "--"] + diff_files,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if add_res.returncode != 0:
+            print(f"오류: git add 실패: {add_res.stderr}", file=sys.stderr)
+            return 1
+
+        commit_res = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(origin_path),
+                "-c",
+                "user.name=KMS",
+                "-c",
+                "user.email=noreply@local",
+                "commit",
+                "-qm",
+                f"stage {args.name}",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if commit_res.returncode != 0:
+            print(f"오류: git commit 실패: {commit_res.stderr}", file=sys.stderr)
+            return 1
+
+    head_res = subprocess.run(
+        ["git", "-C", str(origin_path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if head_res.returncode != 0:
+        print(f"오류: git rev-parse HEAD 실패: {head_res.stderr}", file=sys.stderr)
+        return 1
+    base_sha = head_res.stdout.strip()
+
+    # 계약 6, 8: Orca 등록
+    origin_resolved = origin_path.resolve()
+    origin_abs = str(origin_path) if origin_path.is_absolute() else str(origin_resolved)
+    norm_origin = _norm_path(origin_resolved)
+
+    orca_cmd = args.orca if args.orca else orca_watch.get_default_orca()
+    res_list = orca_watch.run_orca(orca_cmd, ["repo", "list", "--json"])
+    if res_list.returncode != 0:
+        print(
+            f"오류: orca repo list 실패 (코드 {res_list.returncode}): {res_list.stderr or res_list.stdout}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        data_list = json.loads(res_list.stdout)
+    except Exception as e:
+        print(f"오류: orca repo list JSON 디코드 실패: {e}\n{res_list.stdout}", file=sys.stderr)
+        return 1
+
+    if not isinstance(data_list, dict) or data_list.get("ok") is not True:
+        print(f"오류: orca repo list 결과 ok 아님: {data_list}", file=sys.stderr)
+        return 1
+
+    repos = data_list.get("result", {}).get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    repo_id = None
+    for r in repos:
+        if isinstance(r, dict) and _norm_path(r.get("path", "")) == norm_origin:
+            repo_id = r.get("id")
+            break
+
+    registered = False
+    if repo_id:
+        registered = False
+    else:
+        res_add = orca_watch.run_orca(orca_cmd, ["repo", "add", "--path", origin_abs, "--json"])
+        if res_add.returncode != 0:
+            print(
+                f"오류: orca repo add 실패 (코드 {res_add.returncode}): {res_add.stderr or res_add.stdout}",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            data_add = json.loads(res_add.stdout)
+        except Exception as e:
+            print(f"오류: orca repo add JSON 디코드 실패: {e}\n{res_add.stdout}", file=sys.stderr)
+            return 1
+
+        if not isinstance(data_add, dict) or data_add.get("ok") is not True:
+            print(f"오류: orca repo add 결과 ok 아님: {data_add}", file=sys.stderr)
+            return 1
+
+        repo_info = data_add.get("result", {}).get("repo", {})
+        if not isinstance(repo_info, dict) or not repo_info.get("id"):
+            print(f"오류: orca repo add 결과에 id 없음: {data_add}", file=sys.stderr)
+            return 1
+
+        repo_id = repo_info["id"]
+        registered = True
+
+    payload = {
+        "origin": origin_abs,
+        "repo": f"id:{repo_id}",
+        "base": base_sha,
+        "branch": f"stage/{args.name}",
+        "registered": registered,
+    }
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    return 0
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    """release 서브명령 실행."""
+    # 안전 확인: workspace 부모 폴더 이름과 origin 폴더 이름 전체 일치 (대소문자 무시)
+    ws_parent_name = Path(args.workspace).parent.name
+    orig_name = Path(args.origin).name
+    if ws_parent_name.casefold() != orig_name.casefold():
+        print(
+            f"오류: 작업 공간 부모 폴더({ws_parent_name})와 원본 이름({orig_name}) 불일치",
+            file=sys.stderr,
+        )
+        return 2
+
+    subargs = ["worktree", "rm", "--worktree", f"path:{args.workspace}", "--json"]
+    if args.discard:
+        subargs.append("--force")
+
+    orca_cmd = args.orca if args.orca else orca_watch.get_default_orca()
+    res = orca_watch.run_orca(orca_cmd, subargs)
+    if res.returncode != 0:
+        print(
+            f"오류: orca worktree rm 실행 실패 (코드 {res.returncode}): {res.stderr or res.stdout}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        data = json.loads(res.stdout)
+    except Exception as e:
+        print(f"오류: orca worktree rm JSON 디코드 실패: {e}\n{res.stdout}", file=sys.stderr)
+        return 1
+
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        print(f"오류: orca worktree rm 결과 ok 아님: {data}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         try:
@@ -383,6 +670,41 @@ def main() -> int:
         "--interval", type=float, default=5.0, help="확인 주기 초 (기본: 5.0)"
     )
 
+    # 4. stage
+    p_stage = subparsers.add_parser("stage", help="상설 원본에 파일을 올려 기준 커밋 생성")
+    p_stage.add_argument("--src", default=str(ROOT), help="소스 저장소 경로 (기본: 하네스 루트)")
+    p_stage.add_argument(
+        "--origin",
+        default=str(ROOT / ".jobs" / "dev-origin"),
+        help="상설 원본 경로 (기본: <ROOT>/.jobs/dev-origin)",
+    )
+    p_stage.add_argument("--ref", default="HEAD", help="기준 ref (기본: HEAD)")
+    p_stage.add_argument("--name", required=True, help="스테이지 이름")
+    p_stage.add_argument(
+        "--file",
+        action="append",
+        default=None,
+        dest="file",
+        help="스테이지에 복사할 상대 파일 경로 (여러 번 지정 가능)",
+    )
+    p_stage.add_argument("--orca", default=None, help="orca 실행 파일 경로")
+
+    # 5. release
+    p_rel = subparsers.add_parser("release", help="끝난 워커의 작업 공간 정리")
+    p_rel.add_argument("--workspace", required=True, help="작업 공간 경로")
+    p_rel.add_argument(
+        "--origin",
+        default=str(ROOT / ".jobs" / "dev-origin"),
+        help="상설 원본 경로 (기본: <ROOT>/.jobs/dev-origin)",
+    )
+    p_rel.add_argument(
+        "--discard",
+        action="store_true",
+        default=False,
+        help="커밋되지 않은 변경 사항 무시하고 강제 삭제 (--force)",
+    )
+    p_rel.add_argument("--orca", default=None, help="orca 실행 파일 경로")
+
     args = parser.parse_args()
 
     if args.subcommand == "brief-check":
@@ -391,6 +713,10 @@ def main() -> int:
         return cmd_dispatch(args)
     if args.subcommand == "await-final":
         return cmd_await_final(args)
+    if args.subcommand == "stage":
+        return cmd_stage(args)
+    if args.subcommand == "release":
+        return cmd_release(args)
 
     return 2
 
