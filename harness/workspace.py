@@ -56,131 +56,109 @@ def pattern_matches(pattern: str, file_path: str) -> bool:
     return file_path == pattern
 
 
-def plan_subcommand(args: argparse.Namespace) -> int:
-    config_path = args.config
-    if not is_valid_exact_path(config_path):
-        sys.stderr.write(f"error: invalid config path: '{config_path}'\n")
-        return 2
+def build_plan(root: Path, base: str, profile: str, config: str = "config/workspace.toml") -> dict:
+    if not is_valid_exact_path(config):
+        raise ValueError(f"invalid config path: '{config}'")
 
     # 1. Resolve base commit-ish (must resolve to commit)
     proc = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{args.base}^{{commit}}"],
-        cwd=ROOT,
+        ["git", "rev-parse", "--verify", f"{base}^{{commit}}"],
+        cwd=root,
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
-        sys.stderr.write(f"error: cannot resolve base commit '{args.base}': {proc.stderr.strip()}\n")
-        return 2
+        raise ValueError(f"cannot resolve base commit '{base}': {proc.stderr.strip()}")
     base_sha = proc.stdout.strip()
 
     # 2. Verify and read policy file from base_sha in Git
     type_proc = subprocess.run(
-        ["git", "cat-file", "-t", f"{base_sha}:{config_path}"],
-        cwd=ROOT,
+        ["git", "cat-file", "-t", f"{base_sha}:{config}"],
+        cwd=root,
         capture_output=True,
         text=True,
     )
     if type_proc.returncode != 0 or type_proc.stdout.strip() != "blob":
-        sys.stderr.write(f"error: config '{config_path}' not found as blob in commit {base_sha}\n")
-        return 2
+        raise ValueError(f"config '{config}' not found as blob in commit {base_sha}")
 
     blob_proc = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{base_sha}:{config_path}"],
-        cwd=ROOT,
+        ["git", "rev-parse", "--verify", f"{base_sha}:{config}"],
+        cwd=root,
         capture_output=True,
         text=True,
     )
     if blob_proc.returncode != 0:
-        sys.stderr.write(f"error: cannot resolve blob id for '{config_path}' in commit {base_sha}\n")
-        return 2
+        raise ValueError(f"cannot resolve blob id for '{config}' in commit {base_sha}")
     policy_blob = blob_proc.stdout.strip()
 
     content_proc = subprocess.run(
         ["git", "cat-file", "blob", policy_blob],
-        cwd=ROOT,
+        cwd=root,
         capture_output=True,
     )
     if content_proc.returncode != 0:
-        sys.stderr.write(f"error: cannot read config blob {policy_blob}\n")
-        return 2
+        raise ValueError(f"cannot read config blob {policy_blob}")
 
     try:
         policy_text = content_proc.stdout.decode("utf-8")
     except UnicodeDecodeError as e:
-        sys.stderr.write(f"error: config file is not valid UTF-8: {e}\n")
-        return 2
+        raise ValueError(f"config file is not valid UTF-8: {e}")
 
     # 3. Parse TOML and validate schema
     try:
         data = tomllib.loads(policy_text)
     except Exception as e:
-        sys.stderr.write(f"error: failed to parse config TOML: {e}\n")
-        return 2
+        raise ValueError(f"failed to parse config TOML: {e}")
 
     if not isinstance(data, dict):
-        sys.stderr.write("error: config TOML root must be a table\n")
-        return 2
+        raise ValueError("config TOML root must be a table")
 
     if set(data.keys()) != {"schema", "profiles"}:
-        sys.stderr.write(f"error: unexpected top-level keys in config: {sorted(data.keys())}\n")
-        return 2
+        raise ValueError(f"unexpected top-level keys in config: {sorted(data.keys())}")
 
     schema_val = data.get("schema")
     if type(schema_val) is not int or isinstance(schema_val, bool) or schema_val != 1:
-        sys.stderr.write(f"error: schema must be integer 1, got {schema_val!r} of type {type(schema_val).__name__}\n")
-        return 2
+        raise ValueError(f"schema must be integer 1, got {schema_val!r} of type {type(schema_val).__name__}")
 
     profiles_table = data.get("profiles")
     if not isinstance(profiles_table, dict):
-        sys.stderr.write("error: profiles must be a table\n")
-        return 2
+        raise ValueError("profiles must be a table")
 
     for prof_name, prof_data in profiles_table.items():
         if not isinstance(prof_name, str) or not isinstance(prof_data, dict):
-            sys.stderr.write(f"error: profile '{prof_name}' must be a table\n")
-            return 2
+            raise ValueError(f"profile '{prof_name}' must be a table")
         if set(prof_data.keys()) != {"include", "exclude", "required"}:
-            sys.stderr.write(f"error: profile '{prof_name}' keys must be exactly include, exclude, required\n")
-            return 2
+            raise ValueError(f"profile '{prof_name}' keys must be exactly include, exclude, required")
         for field in ("include", "exclude", "required"):
             val = prof_data[field]
             if not isinstance(val, list):
-                sys.stderr.write(f"error: profile '{prof_name}'.{field} must be a list\n")
-                return 2
+                raise ValueError(f"profile '{prof_name}'.{field} must be a list")
             for item in val:
                 if not isinstance(item, str):
-                    sys.stderr.write(f"error: profile '{prof_name}'.{field} item must be a string: {item!r}\n")
-                    return 2
+                    raise ValueError(f"profile '{prof_name}'.{field} item must be a string: {item!r}")
         if len(prof_data["include"]) == 0:
-            sys.stderr.write(f"error: profile '{prof_name}'.include cannot be empty\n")
-            return 2
+            raise ValueError(f"profile '{prof_name}'.include cannot be empty")
         for pat in prof_data["include"]:
             if not is_valid_pattern(pat):
-                sys.stderr.write(f"error: invalid pattern in profile '{prof_name}'.include: '{pat}'\n")
-                return 2
+                raise ValueError(f"invalid pattern in profile '{prof_name}'.include: '{pat}'")
         for pat in prof_data["exclude"]:
             if not is_valid_pattern(pat):
-                sys.stderr.write(f"error: invalid pattern in profile '{prof_name}'.exclude: '{pat}'\n")
-                return 2
+                raise ValueError(f"invalid pattern in profile '{prof_name}'.exclude: '{pat}'")
         for req in prof_data["required"]:
             if not is_valid_exact_path(req):
-                sys.stderr.write(f"error: invalid path in profile '{prof_name}'.required: '{req}'\n")
-                return 2
+                raise ValueError(f"invalid path in profile '{prof_name}'.required: '{req}'")
 
-    if args.profile not in profiles_table:
-        sys.stderr.write(f"error: profile '{args.profile}' not found in config\n")
-        return 2
+    if profile not in profiles_table:
+        raise ValueError(f"profile '{profile}' not found in config")
 
     # 4. Read Git tree at base_sha
     tree_proc = subprocess.run(
         ["git", "ls-tree", "-r", "-z", base_sha],
-        cwd=ROOT,
+        cwd=root,
         capture_output=True,
     )
     if tree_proc.returncode != 0:
-        sys.stderr.write(f"error: git ls-tree failed: {tree_proc.stderr.decode('utf-8', 'replace')}\n")
-        return 2
+        raise ValueError(f"git ls-tree failed: {tree_proc.stderr.decode('utf-8', 'replace')}")
 
     tree_entries = []
     for item in tree_proc.stdout.split(b"\0"):
@@ -189,8 +167,7 @@ def plan_subcommand(args: argparse.Namespace) -> int:
         try:
             text = item.decode("utf-8")
         except UnicodeDecodeError as e:
-            sys.stderr.write(f"error: tree path decode error: {e}\n")
-            return 2
+            raise ValueError(f"tree path decode error: {e}")
         meta, sep, path = text.partition("\t")
         if not sep:
             continue
@@ -201,7 +178,7 @@ def plan_subcommand(args: argparse.Namespace) -> int:
         tree_entries.append({"mode": mode, "type": type_, "blob": blob, "path": path})
 
     # 5. Filter files for active profile
-    active_profile = profiles_table[args.profile]
+    active_profile = profiles_table[profile]
     include_patterns = active_profile["include"]
     exclude_patterns = active_profile["exclude"]
     required_paths = active_profile["required"]
@@ -218,8 +195,7 @@ def plan_subcommand(args: argparse.Namespace) -> int:
 
         mode = entry["mode"]
         if mode not in ("100644", "100755"):
-            sys.stderr.write(f"error: selected special entry (mode {mode}): {path}\n")
-            return 2
+            raise ValueError(f"selected special entry (mode {mode}): {path}")
 
         selected_files.append({
             "path": path,
@@ -228,25 +204,31 @@ def plan_subcommand(args: argparse.Namespace) -> int:
         })
 
     if len(selected_files) == 0:
-        sys.stderr.write("error: final selected file list is empty\n")
-        return 2
+        raise ValueError("final selected file list is empty")
 
     selected_path_set = {f["path"] for f in selected_files}
     for req in required_paths:
         if req not in selected_path_set:
-            sys.stderr.write(f"error: required path '{req}' missing from selection\n")
-            return 2
+            raise ValueError(f"required path '{req}' missing from selection")
 
     selected_files.sort(key=lambda x: x["path"])
 
-    result = {
+    return {
         "schema": 1,
         "base_sha": base_sha,
-        "profile": args.profile,
-        "policy_path": config_path,
+        "profile": profile,
+        "policy_path": config,
         "policy_blob": policy_blob,
         "files": selected_files,
     }
+
+
+def plan_subcommand(args: argparse.Namespace) -> int:
+    try:
+        result = build_plan(ROOT, args.base, args.profile, args.config)
+    except ValueError as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 2
 
     sys.stdout.write(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
     return 0

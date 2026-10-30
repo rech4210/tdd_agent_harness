@@ -78,7 +78,8 @@ def main() -> int:
     def case(name: str, good: bool, detail: str = "") -> None:
         results.append((name, good, detail))
 
-    with tempfile.TemporaryDirectory(prefix="h85-") as tmp:
+    # T25 의 dispatch 가 띄운 감시 프로세스가 작업 공간을 잠시 잡고 있을 수 있어 정리 실패는 무시한다(판정과 무관)
+    with tempfile.TemporaryDirectory(prefix="h85-", ignore_cleanup_errors=True) as tmp:
         base = Path(tmp)
         fake = base / "fake_orca.py"
         fake.write_text(FAKE_ORCA, encoding="utf-8")
@@ -315,53 +316,7 @@ def main() -> int:
         case("T25 stage 출력(repo · base)으로 dispatch → 같은 repo 에 worktree create(--base-branch = base), 새 repo add 없음",
              d.returncode == 0 and ok_args and len(adds(st_e)) == 1, d.stdout + d.stderr)
 
-        # R: release
-        st_r = new_state("rel")
-        ws_ok = base / "orca" / "workspaces" / "dev-origin" / "h85-w1"
-        ws_ok.mkdir(parents=True)
-
-        def release(st2: Path, ws2: Path, *extra: str, origin2: Path = base / "dev-origin"):
-            return tool(st2, "release", "--workspace", str(ws2), "--origin", str(origin2), *extra)
-
-        r = release(st_r, ws_ok)
-        rm = [c for c in calls(st_r) if c[:2] == ["worktree", "rm"]]
-        case("R01 release → worktree rm --worktree path:<작업 공간> --json, --force 없음, 종료 0",
-             r.returncode == 0 and len(rm) == 1 and f"path:{ws_ok}" in rm[0] and "--force" not in rm[0]
-             and "--json" in rm[0], r.stdout + r.stderr)
-
-        st_r2 = new_state("rel2")
-        r = release(st_r2, ws_ok, "--discard")
-        rm = [c for c in calls(st_r2) if c[:2] == ["worktree", "rm"]]
-        case("R02 release --discard → --force 포함", r.returncode == 0 and len(rm) == 1 and "--force" in rm[0],
-             r.stdout + r.stderr)
-
-        st_r3 = new_state("rel3")
-        stranger = base / "orca" / "workspaces" / "some-project" / "w"
-        stranger.mkdir(parents=True)
-        r = release(st_r3, stranger)
-        case("R03 부모 폴더 이름이 원본 이름과 다른 작업 공간 → 종료 2, Orca 호출 없음",
-             real_reject(r) and not calls(st_r3), r.stdout + r.stderr)
-
-        for tag, parent_name in (("b", "dev-origin-evil"), ("c", "evil-dev-origin"), ("d", "dev-origin2")):
-            st_x = new_state(f"rel3{tag}")
-            wx = base / "orca" / "workspaces" / parent_name / "w"
-            wx.mkdir(parents=True)
-            r = release(st_x, wx)
-            case(f"R03{tag} 부모 폴더 이름이 '{parent_name}'(부분 문자열만 같음) → 종료 2, Orca 호출 없음",
-                 real_reject(r) and not calls(st_x), r.stdout + r.stderr)
-
-        st_r4 = new_state("rel4")
-        r = release(st_r4, base / "orca" / "workspaces" / "DEV-ORIGIN" / "w2")
-        case("R04 부모 폴더 이름 비교는 대소문자 무시 → 통과(종료 0)", r.returncode == 0, r.stdout + r.stderr)
-
-        st_r5 = new_state("rel5")
-        (st_r5 / "rmfail").touch()
-        r = release(st_r5, ws_ok)
-        case("R05 worktree rm 실패 → 종료 1", r.returncode == 1, r.stdout + r.stderr)
-        st_r6 = new_state("rel6")
-        (st_r6 / "rmnotok").touch()
-        r = release(st_r6, ws_ok)
-        case("R06 worktree rm 결과 ok 아님 → 종료 1", r.returncode == 1, r.stdout + r.stderr)
+        # release 사례는 WO-H86(저장소 정체성 확인)으로 계약이 바뀌어 check_h86_origin_identity_cases.py 로 옮겼다.
 
         # G: 기존 서브명령 유지
         r = subprocess.run([PY, str(DISPATCH), "brief-check", str(src / "README.md")], capture_output=True,

@@ -70,6 +70,7 @@ Windows PowerShell에서는 `git archive --format=zip -o base.zip $BASE -- <경�
      - **실행 비트(mode) 대조**: POSIX 환경에서는 파일 stat의 실행 비트와 `100755`를 대조하며, Windows 환경에서는 파일 시스템의 POSIX 실행 비트 표현 한계가 있으므로 Git index의 스테이지 모드(`git ls-files --stage`의 `100644` / `100755`)를 계획과 대조.
    - 새 `.git` 자체는 대조 대상에서 제외한다.
    - 이 격리 절차는 작업 공간 내 제공 파일의 조건을 엄격히 제어하는 것이며, OS 권한으로 원본의 절대경로 읽기까지 물리적으로 차단한다고 주장하지 않는다.
+4. **실행 계약 시작**: 이렇게 만든 첫 커밋 작업 공간은 `python harness/execution.py manual-start … --workspace-profile <profile> [--workspace-config <설정 경로>]` 로 실행 계약을 시작한다. 하네스가 원본 base 에서 계획을 다시 만들어 워커 저장소(독립 `.git` · alternates 없음 · 부모 없는 단일 커밋 · HEAD 트리 = 계획 · 저장소 객체 = 그 커밋 · 트리 · 계획 blob 뿐)를 확인하고, 점검 단계에서는 제공하지 않은 원본 파일을 새로 만들어 덮어쓰는 변경을 거부한다. 작업 트리 바이트 대조(위 3)는 여전히 리드 몫이다. 프로필 없이 시작하면 지금처럼 워커 HEAD 가 base 와 같아야 한다.
 
 ## 3. 함정
 
@@ -118,7 +119,7 @@ Start-Process powershell -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy'
 | 무인 실행 | 오케스트레이터의 대기 체크포인트는 실행 상한이 아니다. 감시 도구가 상한 자동 중지를 맡는다 |
 | 지시 파일이 작업 공간에 없음 | 작업 공간이 원격 추적 브랜치에서 만들어지면 로컬로 커밋한 지시가 빠진다. 명령 권한이 없는 작업자는 실패하지 않고 파일을 찾느라 상한까지 시간을 쓴다 → `--base-branch <지시 커밋>` + 만든 직후 확인 |
 | 끝난 뒤 | 증거(지시 · transcript · diff)를 보관하고 `orca worktree rm --worktree path:<경로> --force` |
-| 감시 창 안 글자를 클릭 · 선택하면 콘솔이 일시 정지(QuickEdit)하고 상한 자동 중지도 멈춘다 | 감시 창은 클릭하지 않는다. 제목이 ‘선택’이면 Esc |
+| 감시 창 안 글자를 클릭 · 선택하면 콘솔이 일시 정지(QuickEdit)하고 상한 자동 중지도 멈춘다 | `orca_watch.ps1` 이 자기 콘솔의 QuickEdit 를 끄고 끝날 때 되돌린다(WO-H87). 창이 필요 없으면 `dispatch --no-window` |
 | Orca 앱이 꺼지면 작업자도 끝나고 `terminal` 명령이 ‘Orca is not running’ | `orca worktree list` 로 응답 확인, `orca open` 뒤 새 작업 공간으로 다시 위임(잃은 회차도 1칸) |
 
 위임 전에 작업자의 권한 설정(샌드박스 해제 · 권한 생략 인자가 없는지, 편집 전용 작업자의 명령 차단)을 확인한다.

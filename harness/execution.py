@@ -41,6 +41,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import role_state
+from workspace import build_plan, is_valid_exact_path
 
 
 def _git(root: Path, *args: str) -> str:
@@ -1119,13 +1120,134 @@ def start_manual(root: Path, task: dict, workspace: Path | str, note: str) -> st
         base_verify = ctx["base_verify"]
         head_sha = ctx["head_sha"]
 
-        # 워커 작업 공간의 HEAD 및 clean 검증
-        worker_head = _git(ws_path, "rev-parse", "HEAD")
-        if worker_head != base_verify:
-            raise ValueError(f"워커 HEAD 불일치: {worker_head} != {base_verify}")
-        worker_clean = _git(ws_path, "status", "--porcelain")
-        if worker_clean != "":
-            raise ValueError(f"워커 작업 트리가 시작 시점에 깨끗하지 않습니다: {worker_clean}")
+        # 워커 작업 공간의 HEAD 및 clean 검증 (프로필 지정 여부에 따라 분기)
+        is_filtered = "workspace_profile" in task
+
+        if is_filtered:
+            # 계약 2: [계획] 프로필 및 설정 값 검증 후 build_plan
+            profile = task.get("workspace_profile")
+            if not isinstance(profile, str) or not profile.strip():
+                raise ValueError(f"[계획] workspace_profile 값이 유효하지 않습니다: {profile!r}")
+
+            workspace_config = task.get("workspace_config", "config/workspace.toml")
+            if not isinstance(workspace_config, str) or not is_valid_exact_path(workspace_config):
+                raise ValueError(f"[계획] workspace_config 경로가 유효하지 않습니다: {workspace_config!r}")
+
+            try:
+                plan = build_plan(root, base_verify, profile, workspace_config)
+            except ValueError as e:
+                raise ValueError(f"[계획] {e}") from e
+
+            # 계약 3: 워커 작업 공간 검사 순서 (a -> b -> c -> d -> e -> f -> g)
+            # 3a. [격리:git-dir]
+            expected_git_dir = (ws_path / ".git").resolve()
+            if not (ws_path / ".git").is_dir():
+                raise ValueError(f"[격리:git-dir] 워커 .git 이 디렉터리가 아닙니다: {ws_path / '.git'}")
+            try:
+                p_abs = _git(ws_path, "rev-parse", "--absolute-git-dir")
+                p_common = _git(ws_path, "rev-parse", "--git-common-dir")
+            except Exception as e:
+                raise ValueError(f"[격리:git-dir] git rev-parse 실행 실패: {e}") from e
+
+            abs_git_dir = Path(p_abs).resolve()
+            p_common_path = Path(p_common)
+            common_git_dir = p_common_path.resolve() if p_common_path.is_absolute() else (ws_path / p_common_path).resolve()
+            if abs_git_dir != expected_git_dir or common_git_dir != expected_git_dir:
+                raise ValueError(
+                    f"[격리:git-dir] 워커 git-dir 또는 common-dir 가 독립 .git 디렉터리와 일치하지 않습니다 "
+                    f"({abs_git_dir}, {common_git_dir} != {expected_git_dir})"
+                )
+
+            # 3b. [격리:alternates]
+            git_dir = ws_path / ".git"
+            if (git_dir / "objects" / "info" / "alternates").exists() or (git_dir / "objects" / "info" / "http-alternates").exists():
+                raise ValueError("[격리:alternates] alternates 또는 http-alternates 파일이 감지되었습니다.")
+
+            # 3c. [격리:메타]
+            if (git_dir / "info" / "grafts").exists():
+                raise ValueError("[격리:메타] info/grafts 메타 파일이 감지되었습니다.")
+            if (git_dir / "shallow").exists():
+                raise ValueError("[격리:메타] shallow 메타 파일이 감지되었습니다.")
+            if (git_dir / "modules").exists():
+                raise ValueError("[격리:메타] modules 메타 디렉터리가 감지되었습니다.")
+            if (git_dir / "refs" / "replace").exists():
+                raise ValueError("[격리:메타] refs/replace/ 참조 디렉터리가 감지되었습니다.")
+            p_rep = subprocess.run(["git", "for-each-ref", "refs/replace/"], cwd=ws_path, capture_output=True, text=True)
+            if p_rep.returncode != 0 or p_rep.stdout.strip():
+                raise ValueError(f"[격리:메타] refs/replace/ 참조가 감지되었습니다: {p_rep.stdout.strip() or p_rep.stderr.strip()}")
+
+            # 3d. [격리:parent]
+            commit_raw = _git_bytes(ws_path, "cat-file", "commit", "HEAD")
+            header = commit_raw.split(b"\n\n", 1)[0]
+            for line in header.split(b"\n"):
+                if line.startswith(b"parent "):
+                    raise ValueError("[격리:parent] 원시 HEAD 커밋에 parent 헤더가 존재합니다.")
+
+            # 3e. [격리:tree]
+            tree_out = _git_bytes(ws_path, "ls-tree", "-r", "-z", "HEAD")
+            worker_entries = []
+            for item in tree_out.split(b"\0"):
+                if not item:
+                    continue
+                meta, sep, path_b = item.partition(b"\t")
+                if not sep:
+                    continue
+                parts = meta.split(b" ")
+                if len(parts) != 3:
+                    continue
+                mode_b, type_b, blob_b = parts
+                if type_b != b"blob":
+                    raise ValueError(f"[격리:tree] 워커 트리에 blob 이 아닌 항목이 존재합니다: {meta.decode('utf-8', 'replace')}")
+                worker_entries.append((path_b.decode("utf-8", "surrogateescape"), mode_b.decode("utf-8"), blob_b.decode("utf-8")))
+
+            plan_entries = [(f["path"], f["mode"], f["blob"]) for f in plan["files"]]
+            if sorted(worker_entries) != sorted(plan_entries):
+                raise ValueError("[격리:tree] 워커 트리가 계획 파일 목록(경로, 모드, blob)과 일치하지 않습니다.")
+
+            # 3f. 작업 트리 clean
+            worker_clean = _git(ws_path, "status", "--porcelain")
+            if worker_clean != "":
+                raise ValueError(f"워커 작업 트리가 시작 시점에 깨끗하지 않습니다: {worker_clean}")
+
+            # 3g. [격리:objects]
+            worker_head = _git(ws_path, "rev-parse", "HEAD")
+            worker_root_tree = _git(ws_path, "rev-parse", "HEAD^{tree}")
+
+            ls_trees = _git(ws_path, "ls-tree", "-r", "-t", "HEAD")
+            tree_oids = set()
+            for line in ls_trees.splitlines():
+                if not line.strip():
+                    continue
+                meta, _, _ = line.partition("\t")
+                parts = meta.split()
+                if len(parts) >= 3 and parts[1] == "tree":
+                    tree_oids.add(parts[2])
+
+            plan_blob_oids = {f["blob"] for f in plan["files"]}
+            allowed_oids = {worker_head, worker_root_tree} | tree_oids | plan_blob_oids
+
+            all_objs_out = _git(ws_path, "cat-file", "--batch-all-objects", "--batch-check")
+            actual_oids = set()
+            for line in all_objs_out.splitlines():
+                if not line.strip():
+                    continue
+                parts = line.split()
+                if parts:
+                    actual_oids.add(parts[0])
+
+            if not actual_oids.issubset(allowed_oids):
+                extra_oids = actual_oids - allowed_oids
+                raise ValueError(f"[격리:objects] 워커 저장소에 허용되지 않은 객체가 존재합니다: {extra_oids}")
+
+        else:
+            # 프로필 없음 (exact 모드): 기존 검사 그대로 유지
+            worker_head = _git(ws_path, "rev-parse", "HEAD")
+            if worker_head != base_verify:
+                raise ValueError(f"워커 HEAD 불일치: {worker_head} != {base_verify}")
+            worker_clean = _git(ws_path, "status", "--porcelain")
+            if worker_clean != "":
+                raise ValueError(f"워커 작업 트리가 시작 시점에 깨끗하지 않습니다: {worker_clean}")
+
         worker_start_snapshot = _snapshot_directory(ws_path)
 
         run_id = f"manual_{int(time.time()*1000)}_{task['slice']}_{role}"
@@ -1139,6 +1261,7 @@ def start_manual(root: Path, task: dict, workspace: Path | str, note: str) -> st
             "slice": task["slice"],
             "role": role,
             "base": base_verify,
+            "base_mode": "filtered" if is_filtered else "exact",
             "approval_ref": task["approval_ref"],
             "agent": app.get("agent"),
             "model": app.get("model"),
@@ -1169,6 +1292,14 @@ def start_manual(root: Path, task: dict, workspace: Path | str, note: str) -> st
             "worker_start_snapshot": worker_start_snapshot,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        if is_filtered:
+            contract["workspace_profile"] = profile
+            contract["workspace_config"] = workspace_config
+            contract["policy_blob"] = plan["policy_blob"]
+            contract["worker_head"] = worker_head
+            contract["worker_tree"] = worker_root_tree
+            contract["plan_paths"] = [f["path"] for f in plan["files"]]
 
         contract_file = run_dir / "contract.json"
         status_file = run_dir / "status.json"
@@ -1287,6 +1418,16 @@ def _validate_check_common(
     start_snap = contract.get("worker_start_snapshot", {})
     cur_snap = _snapshot_directory(ws_path)
     changed_files = _diff_snapshots(start_snap, cur_snap)
+
+    # 계약 5: [미제공 덮어쓰기] 검사 (보호 경로 및 origin_target_snapshot 검사보다 앞에 배치)
+    if contract.get("base_mode") == "filtered":
+        base_tree_out = _git_bytes(root, "ls-tree", "-r", "-z", "--name-only", contract["base"])
+        base_tree_paths_cf = {p.casefold() for p in base_tree_out.decode("utf-8", "replace").split("\0") if p}
+        plan_cf = {p.casefold() for p in contract.get("plan_paths", [])}
+        for f, action in changed_files.items():
+            # 시작 전 무시 파일로 숨겨 둔 미제공 경로는 modify 로 보일 수 있다 — 계획 밖 base 경로면 종류와 무관 (마일스톤 검토 R01)
+            if f.casefold() in base_tree_paths_cf and f.casefold() not in plan_cf:
+                raise ValueError(f"[미제공 덮어쓰기] 원본 base 트리에 이미 존재하는 미제공 경로가 새로 추가(add)되었습니다: {f}")
 
     # 원본 파일 대상 변경 감지 (동시 수정 및 H 인계로 변경된 원본 문서 덮어쓰기 방지)
     _validate_origin_target_snapshot(root, changed_files.keys(), contract.get("origin_start_snapshot", {}))
@@ -1836,6 +1977,8 @@ def main() -> int:
     p_mstart.add_argument("--approval-ref", required=True, help="승인 참조")
     p_mstart.add_argument("--workspace", required=True, help="격리된 작업 공간 경로")
     p_mstart.add_argument("--note", required=True, help="수동 시작 사유/노트")
+    p_mstart.add_argument("--workspace-profile", default=None, help="작업 공간 프로필")
+    p_mstart.add_argument("--workspace-config", default=None, help="작업 공간 정책 설정 파일 경로")
 
     p_mcheck = sub.add_parser("manual-check", help="수동 실행 산출물 검증")
     p_mcheck.add_argument("--run", required=True, help="실행 ID")
@@ -1860,6 +2003,10 @@ def main() -> int:
             "base": args.base,
             "approval_ref": args.approval_ref,
         }
+        if args.workspace_profile is not None:
+            task["workspace_profile"] = args.workspace_profile
+        if args.workspace_config is not None:
+            task["workspace_config"] = args.workspace_config
         try:
             run_id = start_manual(root, task, args.workspace, args.note)
             print(f"수동 실행 등록 완료: run_id={run_id}")

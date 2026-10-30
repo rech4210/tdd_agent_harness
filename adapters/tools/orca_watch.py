@@ -32,6 +32,9 @@ if tools_dir not in sys.path:
 
 from collect_usage import parse_agy, parse_codex, validate_execution_contract
 
+# Windows: 창 없는(분리) 감시에서 자식(orca · git · python)이 콘솔 창을 잠깐 띄우지 않게 한다 (WO-H91)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 GUIDE_SUBSTRINGS = (
     "esc to cancel",
     "for shortcuts",
@@ -114,6 +117,7 @@ def get_dirty_count(workspace: Path) -> int:
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=NO_WINDOW,
         )
         if res.returncode == 0:
             lines = [l for l in res.stdout.splitlines() if l.strip()]
@@ -135,6 +139,7 @@ def porcelain_lines(workspace: Path) -> list[str] | None:
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=NO_WINDOW,
         )
         if res.returncode == 0:
             return [l for l in res.stdout.splitlines() if l.strip()]
@@ -143,9 +148,20 @@ def porcelain_lines(workspace: Path) -> list[str] | None:
         return None
 
 
-def final_response(agent: str, log_path: Path | None) -> tuple[str | None, bool]:
+def _row_time(row: dict[str, Any], key: str) -> datetime | None:
+    ts = row.get(key)
+    if not isinstance(ts, str):
+        return None
+    try:
+        return parse_iso(ts)
+    except Exception:
+        return None
+
+
+def final_response(agent: str, log_path: Path | None, since: datetime | None = None) -> tuple[str | None, bool]:
     """작업자 로그에서 최종 응답 본문과 잘림 여부를 추출한다.
     예외 발생 시 또는 응답이 없으면 (None, False)를 반환한다.
+    since 가 있으면(피드백 회차 감시) 그 뒤의 답만 본다 — 시각을 모르는 답도 이전 회차일 수 있어 뺀다 (WO-H92).
     """
     if log_path is None or not isinstance(log_path, Path):
         return None, False
@@ -183,6 +199,10 @@ def final_response(agent: str, log_path: Path | None) -> tuple[str | None, bool]
                     tool_calls = row.get("tool_calls")
                     if tool_calls:
                         continue
+                    if since is not None:
+                        at = _row_time(row, "created_at")
+                        if at is None or at < since:
+                            continue
 
                     last_content = content
                     if not from_full and "content" in str(row.get("truncated_fields") or ""):
@@ -217,6 +237,10 @@ def final_response(agent: str, log_path: Path | None) -> tuple[str | None, bool]
                         continue
                     if payload.get("type") != "task_complete":
                         continue
+                    if since is not None:
+                        at = _row_time(row, "timestamp")
+                        if at is None or at < since:
+                            continue
                     msg = payload.get("last_agent_message")
                     if isinstance(msg, str) and msg.strip():
                         last_content = msg
@@ -286,6 +310,7 @@ def run_orca(orca_cmd: str, subargs: list[str]) -> subprocess.CompletedProcess[s
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=NO_WINDOW,
     )
 
 
@@ -310,8 +335,12 @@ def find_worker_log(
     transcript_root: Path | None,
     workspace: Path,
     start_time_utc: datetime,
+    continuing: bool = False,
 ) -> Path | None:
-    """작업자 로그 파일을 검색한다."""
+    """작업자 로그 파일을 검색한다.
+    continuing(피드백 회차 감시)이면 같은 대화를 이어 쓰므로 첫 줄(대화 시작)이 오래돼도 후보로 두고,
+    가장 최근에 바뀐 로그를 고른다 (WO-H92). 마지막 수정 시각 · 작업 공간 일치 조건은 그대로.
+    """
     if transcript_root is None:
         user_home = Path(os.environ.get("USERPROFILE", str(Path.home())))
         if agent == "agy":
@@ -383,7 +412,7 @@ def find_worker_log(
                             first_dt = parse_iso(ts_str)
                         except Exception:
                             break
-                        if first_dt < threshold:
+                        if first_dt < threshold and not continuing:
                             break
 
                         if agent == "codex":
@@ -400,6 +429,8 @@ def find_worker_log(
                             pass
 
             if matched and first_dt is not None:
+                if continuing:
+                    first_dt = datetime.fromtimestamp(cand.stat().st_mtime, timezone.utc)
                 valid_candidates.append((first_dt, cand))
 
         except Exception:
@@ -408,9 +439,13 @@ def find_worker_log(
     if not valid_candidates:
         return None
 
-    valid_candidates.sort(
-        key=lambda x: (abs((x[0] - start_time_utc).total_seconds()), str(x[1]))
-    )
+    if continuing:
+        # 회차 감시: 마지막 수정 시각이 가장 늦은 로그 (마일스톤 검토 A04)
+        valid_candidates.sort(key=lambda x: (-x[0].timestamp(), str(x[1])))
+    else:
+        valid_candidates.sort(
+            key=lambda x: (abs((x[0] - start_time_utc).total_seconds()), str(x[1]))
+        )
     return valid_candidates[0][1]
 
 
@@ -481,6 +516,8 @@ def main() -> int:
     parser.add_argument("--save-final", action="store_true", help="종료 시 최종 응답 저장 (WO-H78)")
 
     args = parser.parse_args()
+    # 피드백 회차 감시(--round ≥ 1): 같은 대화를 이어 감시한다 (WO-H92)
+    continuing = args.round is not None and args.round >= 1
 
     # 인자 검증
     if args.cap_seconds is None or args.cap_seconds < 1:
@@ -582,7 +619,7 @@ def main() -> int:
             round_val = estimate_round(ROOT, args.wo, args.role, args.agent)
             write_log(f"회차 추정 {round_val}", time.monotonic() - start_mono)
 
-        worker_log = find_worker_log(args.agent, transcript_root, workspace, start_time_utc)
+        worker_log = find_worker_log(args.agent, transcript_root, workspace, start_time_utc, continuing=continuing)
         provider_session_id = None
         if worker_log:
             try:
@@ -641,6 +678,7 @@ def main() -> int:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                creationflags=NO_WINDOW,
             )
             if col.returncode == 0:
                 write_log(f"기록: {col.stdout.strip()[:160]} ({worker_log})", time.monotonic() - start_mono)
@@ -689,7 +727,7 @@ def main() -> int:
     def _save_final(outcome: str) -> None:
         final_path = log_path.with_name(log_path.stem + ".final.md")
         worker_log = (
-            find_worker_log(args.agent, transcript_root, workspace, start_time_utc)
+            find_worker_log(args.agent, transcript_root, workspace, start_time_utc, continuing=continuing)
             if args.agent != "claude"
             else None
         )
@@ -706,7 +744,7 @@ def main() -> int:
             else:
                 change_items = ""
 
-        resp, is_truncated = final_response(args.agent, worker_log)
+        resp, is_truncated = final_response(args.agent, worker_log, since=start_time_utc if continuing else None)
         if resp is not None and resp.strip():
             body_part = resp
             if is_truncated:

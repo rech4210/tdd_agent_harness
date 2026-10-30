@@ -58,7 +58,8 @@ SPEC_HEAD = """# 기능
 |:---|:---|:---|:---|
 """
 DECISIONS = "# 결정 기록\n\n## D-01 단위\n\n정수.\n"
-DEFAULTS = "# 공통 기본값\n\n| ID | 규칙 |\n|:---|:---|\n| **DEF-01** | 거부는 입력 · 상태를 바꾸지 않는다 |\n"
+# 승인 칸 = 정의된 D-## (WO-H88: 승인되지 않은 DEF 는 인용할 수 없다)
+DEFAULTS = "# 공통 기본값\n\n| ID | 규칙 | 승인 |\n|:---|:---|:---|\n| **DEF-01** | 거부는 입력 · 상태를 바꾸지 않는다 | D-01 |\n"
 TEST = '"""t.\n\nguards:      FR-001\ntechnique:   05\nchecklist:   B-2\n"""\n'
 CFG = {"requirements": ["specs/*/spec.md"], "decisions": ["reports/decisions.md"], "modules": ["tests/**/test_*.py"],
        "defaults": ["docs/DEFAULTS.md"]}

@@ -43,7 +43,7 @@ decisions = ["reports/decisions.md"]        # D-## 를 정의하는 파일 (temp
 modules = ["tests/**/test_*.py"]            # 머리말(guards · technique · checklist)이 있어야 하는 테스트 모듈
 defaults = ["docs/DEFAULTS.md"]     # DEF-## 를 정의하는 파일 (경계 표 승격 근거, 공통 기본값)
 # product_invariants = ["docs/PRODUCT.md"]  # INV-G# (제품 불변식)를 정의하는 파일. 설정하면 경계 표 승격 근거로 인용 가능, D-## 와 쉼표로 섞기 가능 (HD-27)
-# 검사: header · id_format · undecided · forward · backward · assumptions · clarifications · needs_clarification (docs/sdd-integration.md)
+# 검사: header · id_format · undecided · forward · backward · assumptions · clarifications · needs_clarification · duplicate · boundaries · defaults_scope · batch_integrity(일괄 승인 블록 = 패키지 해시 · 원문) (docs/sdd-integration.md)
 # 아직 테스트로 지키지 않는 요구: 이유와 사람 구간을 적는다. 슬라이스에서는 보고서에 남고, 전체 게이트(릴리스)에서는 실패한다 (HD-07)
 # deferred = { "FR-007" = "H2: 정밀도 미결정, 다음 슬라이스" }
 # 슬라이스는 override 로 범위를 고른다: in_scope = ["FR-001", "FR-002"]

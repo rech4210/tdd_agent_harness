@@ -149,6 +149,11 @@ class ConsumerSafeCases(unittest.TestCase):
                               text=True, encoding="utf-8", errors="replace", timeout=1800,
                               env=dict(os.environ))
 
+    def _need_export_cases(self):
+        # 공개본은 check_export_cases.py 를 일부러 빼고 내보낸다(scripts/export_public.py) — 대상이 없으면 검사할 것도 없다
+        if not (ROOT / "harness" / "selftest" / "check_export_cases.py").is_file():
+            self.skipTest("check_export_cases.py 없음(공개본)")
+
     # --- shipped defaults ---
 
     def test_s00_template_config_shipped(self):
@@ -259,6 +264,7 @@ class ConsumerSafeCases(unittest.TestCase):
         self._assert_passes("check_v04_cases")
 
     def test_c09_export_skips_in_consumer(self):
+        self._need_export_cases()
         p = self.run_in_consumer("check_export_cases")
         out = p.stdout + p.stderr
         self.assertEqual(p.returncode, 0, out[-2000:])
@@ -267,6 +273,7 @@ class ConsumerSafeCases(unittest.TestCase):
     # --- guards ---
 
     def test_g01_export_half_missing_still_fails(self):
+        self._need_export_cases()
         # Export config present but tool missing: a broken harness repo, not a consumer.
         tmp = tempfile.TemporaryDirectory(prefix="h84-half-")
         self.addCleanup(tmp.cleanup)
@@ -279,6 +286,7 @@ class ConsumerSafeCases(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, (p.stdout + p.stderr)[-2000:])
 
     def test_g01b_export_tool_only_still_fails(self):
+        self._need_export_cases()
         # Export tool present but config missing: also a broken harness repo.
         tmp = tempfile.TemporaryDirectory(prefix="h84-half2-")
         self.addCleanup(tmp.cleanup)
@@ -289,6 +297,7 @@ class ConsumerSafeCases(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, (p.stdout + p.stderr)[-2000:])
 
     def test_g02_export_skip_leaves_consumer_untouched(self):
+        self._need_export_cases()
         before = self.snapshot()
         self.run_in_consumer("check_export_cases")
         self.assertEqual(self.snapshot(), before)
