@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNER = ROOT / "scripts" / "run_suite_parallel.py"
+RUNNER = ROOT / "harness" / "selftest_runner.py"
 PY = sys.executable
 
 # 시작하면 ORDER_FILE 에 자기 이름을 한 줄 붙인다
@@ -70,10 +70,6 @@ def order_of(order: Path) -> list[str]:
 
 
 def main() -> int:
-    if not RUNNER.is_file():
-        # 공개본 · 소비 프로젝트에는 scripts/ 가 없다(하네스 개발 도구, scripts/export_public.py 가 뺀다)
-        print("SKIP scripts/run_suite_parallel.py 없음(하네스 개발 저장소 전용)")
-        return 0
     results: list[tuple[str, bool, str]] = []
 
     def case(name: str, good: bool, detail: str = "") -> None:

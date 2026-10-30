@@ -34,6 +34,7 @@ git status                                                   # 하네스 소유 
 python harness/upgrade.py --remote upstream --ref <태그 또는 main> --dry-run   # 바뀔 파일 보기
 python harness/upgrade.py --remote upstream --ref <태그 또는 main>
 python harness/doctor.py
+python harness/selftest_runner.py --workers 8  # 하네스 자기 검사(진행 출력·로그는 기본 임시 폴더)
 python harness/run_gates.py --role implementer --base HEAD   # 전체 게이트로 판정이 그대로인지
 git commit -m "Upgrade harness from agent-harness <ref> (<무엇이 바뀌었나>)"
 ```
